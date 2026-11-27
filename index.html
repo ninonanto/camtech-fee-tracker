@@ -126,6 +126,13 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
 .perm td, .perm th { text-align: center; } .perm td:first-child { text-align: left; }
 .ln-grid td { padding: 4px; } .ln-grid input, .ln-grid select { width: 100%; }
 .empty { padding: 26px; text-align: center; color: var(--muted); }
+.skel { display: inline-block; height: 1em; border-radius: 6px; background: linear-gradient(90deg, var(--line) 25%, color-mix(in srgb, var(--line) 40%, var(--surface)) 50%, var(--line) 75%); background-size: 200% 100%; animation: skel 1.3s linear infinite; width: 100%; }
+@keyframes skel { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+.loadcard { display: flex; gap: 16px; align-items: center; border-left: 4px solid var(--gold); }
+.spin { width: 30px; height: 30px; border-radius: 50%; border: 3px solid var(--accent-soft); border-top-color: var(--accent); animation: spin .9s linear infinite; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.ldbar { height: 6px; background: var(--accent-soft); border-radius: 4px; margin: 8px 0 4px; overflow: hidden; }
+.ldbar span { display: block; height: 100%; background: var(--accent); transition: width .4s ease; }
 
 /* ------------------------------------------------ print: invoices, receipts, reports (A4, Khmer + English) */
 #print { display: none; }
@@ -388,6 +395,26 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
     return { kpi: k, months: months, cats: cats, topOverdue: topOd, year: year, ay: ay, ayStart: S, month: month, prog: prog };
   }
 
+  /* ------------------------------ Students by academic year (last N) ------------------------------ */
+  /** For each academic year: new students (that year's intake), active students (tuition invoiced in the year),
+   *  rejected / suspended (of that intake). endAy = last academic year shown. */
+  function studentsByAy(M, endAy, n, prog) {
+    var S = M.ayStart || 9, base = M.intakeBase || 2014, out = [];
+    for (var y = endAy - (n || 3) + 1; y <= endAy; y++) {
+      var intake = "Intake " + (y - base), act = {}, nw = 0, rj = 0, en = 0;
+      M.students.forEach(function (s) {
+        if (prog && s.prog !== prog) return;
+        if (String(s.intake).replace(/\s+/g, " ").trim().toLowerCase() === intake.toLowerCase()) { nw++; if (s.rs) rj++; if (s.admPaid >= 1 && !s.rs) en++; }
+      });
+      M.lines.forEach(function (l) {
+        if (!l.reg || !l.stu || l.rs || !l.issue || (prog && l.prog !== prog)) return;
+        if (isTuition(l) && ayOf(l.issue, S) === y) act[l.reg] = 1;
+      });
+      out.push({ ay: y, label: ayLabel(y), intake: y - base >= 1 ? intake : "", newStudents: nw, enrolled: en, rejected: rj, active: Object.keys(act).length });
+    }
+    return out;
+  }
+
   /* ------------------------------ Intake report (Report VP) ------------------------------ */
   function intakeReport(M, intake, target) {
     var all = !intake || intake === "All intakes";
@@ -505,7 +532,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
     return p + ("000000000" + (max + 1)).slice(-Math.max(digits || 5, String(max + 1).length));
   }
 
-  var API = { ayOf: ayOf, ayLabel: ayLabel, build: build, dashboard: dashboard, intakeReport: intakeReport, ar: ar, daily: daily, checks: checks, nextNo: nextNo,
+  var API = { ayOf: ayOf, ayLabel: ayLabel, studentsByAy: studentsByAy, build: build, dashboard: dashboard, intakeReport: intakeReport, ar: ar, daily: daily, checks: checks, nextNo: nextNo,
     schedYear: schedYear, schedTerm: schedTerm, addDays: addDays, round2: round2, DISC_CAT: DISC_CAT };
   if (typeof module !== "undefined" && module.exports) module.exports = API; else root.CT = API;
 })(this);
@@ -533,7 +560,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
     dash: ["Dashboard", "ផ្ទាំងសង្ខេប"], students: ["Students", "និស្សិត"], invoices: ["Invoices", "វិក្កយបត្រ"], payments: ["Payments", "ការបង់ប្រាក់"],
     rejects: ["Reject / Suspend", "បដិសេធ / ព្យួរ"], reports: ["Reports", "របាយការណ៍"], lists: ["Lists", "បញ្ជី"], admin: ["Admin", "អ្នកគ្រប់គ្រង"],
     invoice: ["Invoice", "វិក្កយបត្រ"], receipt: ["Official receipt", "បង្កាន់ដៃទទួលប្រាក់"], receipts: ["Receipts", "បង្កាន់ដៃ"],
-    studentsN: ["Students", "ចំនួននិស្សិត"], activeN: ["Active students", "និស្សិតកំពុងសិក្សា"], totalStu: ["Total students", "និស្សិតសរុប"], gross: ["Gross billed", "ទឹកប្រាក់វិក្កយបត្រសរុប"], disc: ["Discounts & scholarships", "ការបញ្ចុះតម្លៃ និងអាហារូបករណ៍"],
+    studentsN: ["Students", "ចំនួននិស្សិត"], activeN: ["Active students", "និស្សិតកំពុងសិក្សា"], byAy: ["Students by academic year", "និស្សិតតាមឆ្នាំសិក្សា"], registered: ["Registered", "ចុះឈ្មោះ"], enrolledN: ["Enrolled", "ចូលរៀន"], rejShort: ["Rej./sus.", "បដិសេធ/ព្យួរ"], activeS: ["Active", "កំពុងសិក្សា"], totalStu: ["Total students", "និស្សិតសរុប"], gross: ["Gross billed", "ទឹកប្រាក់វិក្កយបត្រសរុប"], disc: ["Discounts & scholarships", "ការបញ្ចុះតម្លៃ និងអាហារូបករណ៍"],
     received: ["Received in period", "ប្រាក់ទទួលបានក្នុងកំឡុងពេល"], outstanding: ["Outstanding", "ប្រាក់នៅជំពាក់"], coll: ["Collection rate", "អត្រាប្រមូលប្រាក់"],
     overdue: ["Overdue", "ហួសកាលកំណត់"], paid: ["Paid", "បានបង់"], unpaid: ["Unpaid", "មិនទាន់បង់"], applied: ["Applied", "បានអនុវត្ត"], check: ["Check price", "ពិនិត្យតម្លៃ"],
     month: ["Month", "ខែ"], year: ["Year", "ឆ្នាំ"], ay: ["Academic year", "ឆ្នាំសិក្សា"], prog: ["Programme", "កម្មវិធីសិក្សា"], major: ["Major", "ជំនាញ"], intake: ["Intake", "ជំនាន់"], gender: ["Gender", "ភេទ"],
@@ -619,6 +646,26 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
       .then(function (r) { if (!r.ok) throw { code: "http", detail: r.status }; return r.json(); })
       .then(function (j) { if (!j || !j.ok) throw { code: (j && j.error) || "server_error", detail: j && j.detail }; return j; });
   }
+  /** Same as api(), but reports download progress (bytes received) while the data arrives. */
+  function apiProgress(payload, onBytes) {
+    payload.token = S.token;
+    if (API_URL.indexOf("http") !== 0) return Promise.reject({ code: "nourl" });
+    return fetch(API_URL, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(payload), redirect: "follow" })
+      .then(function (r) {
+        if (!r.ok) throw { code: "http", detail: r.status };
+        if (!r.body || !r.body.getReader || !window.TextDecoder) return r.json();
+        var reader = r.body.getReader(), dec = new TextDecoder(), txt = "", got = 0;
+        function pump() {
+          return reader.read().then(function (x) {
+            if (x.done) { txt += dec.decode(); return JSON.parse(txt); }
+            got += x.value.length; txt += dec.decode(x.value, { stream: true }); if (onBytes) onBytes(got);
+            return pump();
+          });
+        }
+        return pump();
+      })
+      .then(function (j) { if (!j || !j.ok) throw { code: (j && j.error) || "server_error", detail: j && j.detail }; return j; });
+  }
   function errText(e) {
     if (!e) return "Unknown problem.";
     if (e.code === "invalid" || e.code === "conflict") return e.detail;
@@ -695,15 +742,56 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
     S.feeActive = S.fees.filter(function (f) { return f.active; });
     S.voidLines = S.lines.filter(function (l) { return l.status === "Void"; });
   }
+  /* ---------------- loading screen: the home page frame with a status, instead of a blank page ---------------- */
+  var LOADT = null;
+  function showLoading() {
+    $("login").classList.add("hide"); $("app").classList.remove("hide");
+    var who = ""; try { who = localStorage.getItem(LS_USER) || ""; } catch (e) {}
+    $("whoName").textContent = who; $("whoRole").textContent = "…";
+    $("tabs").innerHTML = PAGES.map(function (p) { return '<button disabled style="opacity:.55"><i class="ti ' + p.icon + '"></i><span>' + esc(en(p.id)) + " <small>" + esc(kh(p.id)) + "</small></span></button>"; }).join("");
+    var tile = function (k) { return '<div class="kpi"><div class="l">' + esc(en(k)) + '<span class="kh">' + esc(kh(k)) + '</span></div><div class="v"><span class="skel" style="width:70%"></span></div><div class="s"><span class="skel" style="width:50%"></span></div></div>'; };
+    $("page").innerHTML = '<div class="head"><div><h2>' + L("dash") + '</h2><p>Loading the latest data from the Google Sheet…</p></div></div>' +
+      '<div class="card loadcard"><div class="spin"></div><div style="flex:1"><div id="ldStep" style="font-weight:600">Connecting to the Google Sheet · កំពុងភ្ជាប់ទៅ Google Sheet</div>' +
+      '<div class="ldbar"><span id="ldBar" style="width:8%"></span></div><div id="ldInfo" class="small muted">Starting…</div></div></div>' +
+      '<div class="kpis">' + ["totalStu", "activeN", "gross", "disc", "received", "outstanding", "coll"].map(tile).join("") + "</div>" +
+      '<div class="grid g2"><div class="card"><h3>' + L("monthly") + '</h3><div class="skel" style="height:240px"></div></div><div class="card"><h3>' + L("byCat") + '</h3><div class="skel" style="height:240px"></div></div></div>';
+    var t0 = Date.now();
+    clearInterval(LOADT);
+    LOADT = setInterval(function () {
+      var el = $("ldInfo"); if (!el) { clearInterval(LOADT); return; }
+      var sec = Math.round((Date.now() - t0) / 1000);
+      el.setAttribute("data-sec", sec);
+      if (!el.getAttribute("data-bytes")) el.textContent = sec + " s · the Google Sheet is preparing " + "students and invoice lines (usually 5–15 s)";
+      var bar = $("ldBar"); if (bar && !el.getAttribute("data-bytes")) bar.style.width = Math.min(45, 8 + sec * 3) + "%";
+    }, 500);
+  }
+  function loadStep(step, pctW, info) {
+    if ($("ldStep")) $("ldStep").textContent = step;
+    if ($("ldBar") && pctW) $("ldBar").style.width = pctW + "%";
+    if ($("ldInfo") && info) { $("ldInfo").setAttribute("data-bytes", "1"); $("ldInfo").textContent = info; }
+  }
   function load(quiet) {
     setSync("busy", "Loading…");
-    return api({ action: "bootstrap" }).then(function (j) {
+    if (!quiet || !S.raw) showLoading();
+    var t0 = Date.now();
+    return apiProgress({ action: "bootstrap" }, function (bytes) {
+      if (quiet && S.raw) return;
+      loadStep("Receiving data · កំពុងទាញយកទិន្នន័យ", Math.min(85, 50 + bytes / 60000), (bytes / 1048576).toFixed(1) + " MB received · " + Math.round((Date.now() - t0) / 1000) + " s");
+    }).then(function (j) {
+      loadStep("Calculating totals · កំពុងគណនា", 92, "Almost ready…");
+      return new Promise(function (res) { setTimeout(function () { res(j); }, 30); });
+    }).then(function (j) {
+      clearInterval(LOADT);
       ingest(j);
       setSync("ok", "Up to date " + timeNow());
       if (!quiet) { startApp(); }
       else render();
       if (j.mustChange) changePasswordDialog(true);
-    }).catch(function (e) { handleError(e, "Loading"); if (e && e.code !== "signed_out" && !S.raw) { $("page").innerHTML = '<div class="card empty">' + esc(errText(e)) + "</div>"; } });
+    }).catch(function (e) {
+      clearInterval(LOADT);
+      handleError(e, "Loading");
+      if (e && e.code !== "signed_out" && !S.raw) { $("page").innerHTML = '<div class="card empty">' + esc(errText(e)) + '<div style="margin-top:12px"><button class="btn primary" id="ldRetry"><i class="ti ti-refresh"></i> Try again</button></div></div>'; if ($("ldRetry")) $("ldRetry").onclick = function () { load(false); }; }
+    });
   }
 
   /* ---------------- sign-in ---------------- */
@@ -889,6 +977,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
   function dashFilter() { return S.cache.dashF || (S.cache.dashF = { ay: "Auto", month: "All", prog: "All" }); }
   RENDER.dash = function (el) {
     var f = dashFilter(), D = CT.dashboard(S.M, f), k = D.kpi;
+    var AYS = CT.studentsByAy(S.M, D.ay || CT.ayOf(today(), S.M.ayStart), 3, D.prog);
     var perTxt = (D.ay ? "Academic year " + ayText(D.ay) : "All academic years") + (D.month ? " · " + MONL[D.month - 1] : " · all months") + (D.prog ? " · " + D.prog : "");
     el.innerHTML =
       '<div class="head"><div><h2>' + L("dash") + '</h2><p>USD · ' + esc(perTxt) + " · updated " + fd(today()) + '</p></div><div class="bar">' +
@@ -912,14 +1001,20 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
       catOrder(D.cats).map(function (c) { return "<tr><td>" + esc(c) + '</td><td class="n">' + int(D.cats[c].lines) + '</td><td class="n">' + usd(D.cats[c].amt) + '</td><td class="n">' + (k.gross ? pct(D.cats[c].amt / k.gross) : "–") + "</td></tr>"; }).join("") +
       "</tbody></table></div>" +
       '<div class="card"><h3>' + L("topOd") + "</h3>" + (D.topOverdue.length ? '<table><thead><tr><th>' + L("reg") + "</th><th>" + L("name") + "</th><th>" + L("intake") + '</th><th class="n">' + L("overdue") + "</th></tr></thead><tbody>" +
-      D.topOverdue.map(function (r) { return '<tr class="click" data-stu="' + esc(r.reg) + '"><td>' + esc(r.reg) + "</td><td>" + esc(r.name) + '<div class="small muted">' + esc(r.major) + "</div></td><td>" + esc(r.intake) + '</td><td class="n neg">' + usd(r.amt) + "</td></tr>"; }).join("") + "</tbody></table>" : '<div class="empty">No overdue balances.</div>') + "</div></div></div>";
+      D.topOverdue.map(function (r) { return '<tr class="click" data-stu="' + esc(r.reg) + '"><td>' + esc(r.reg) + "</td><td>" + esc(r.name) + '<div class="small muted">' + esc(r.major) + "</div></td><td>" + esc(r.intake) + '</td><td class="n neg">' + usd(r.amt) + "</td></tr>"; }).join("") + "</tbody></table>" : '<div class="empty">No overdue balances.</div>') + "</div></div></div>" +
+      '<div class="card"><h3>' + L("byAy") + ' <span class="small muted" style="font-weight:400">· last 3 academic years' + (D.prog ? " · " + esc(D.prog) : "") + '</span></h3><div class="grid g2" style="align-items:start"><div class="chart-box" style="height:260px"><canvas id="cAy"></canvas></div>' +
+      '<div class="tbl-wrap"><table><thead><tr><th>' + L("ay") + "</th><th>" + L("intake") + '</th><th class="n">' + L("registered") + '</th><th class="n">' + L("enrolledN") + '</th><th class="n">' + L("rejShort") + '</th><th class="n">' + L("activeS") + "</th></tr></thead><tbody>" +
+      AYS.map(function (r) { return "<tr><td style=\"white-space:nowrap\">" + esc(r.label) + "</td><td style=\"white-space:nowrap\">" + esc(r.intake || "–") + '</td><td class="n">' + int(r.newStudents) + '</td><td class="n">' + int(r.enrolled) + '</td><td class="n">' + int(r.rejected) + '</td><td class="n"><b>' + int(r.active) + "</b></td></tr>"; }).join("") +
+      '</tbody></table><p class="small muted">Registered = students on the list under that intake (applicants included). Enrolled = paid the admin fee, not rejected / suspended. Active = tuition invoiced during that academic year (all intakes; Sep–Aug).</p></div></div></div>';
     function upd() { S.cache.dashF = { ay: $("dfY").value, month: $("dfM").value, prog: $("dfP").value }; render(); }
     ["dfY", "dfM", "dfP"].forEach(function (id) { $(id).onchange = upd; });
+    D.ays = AYS;
     $("dPrint").onclick = function () { printDash(D, perTxt); };
     $("dXls").onclick = function () {
       exportXlsx("CamTech_Dashboard_" + today() + ".xlsx", [
         ["Summary", [["CamTech Fee Tracker – Dashboard", perTxt], [], ["Item / ធាតុ", "Value"], [bi("totalStu"), k.students], [bi("activeN") + (k.periodBased ? " (tuition invoiced in period)" : " (marked Active)"), k.active], [bi("gross"), k.gross], [bi("disc"), k.disc], [bi("received"), k.received], [bi("outstanding"), k.outstanding], ["Overdue lines", k.overdueLines], [bi("coll"), k.coll]]],
         ["Monthly", [[bi("month"), bi("netBilled"), bi("collected"), bi("balance"), bi("collPct")]].concat(D.months.map(function (m) { return [m.key, m.billed, m.collected, m.bal, m.pct]; }))],
+        ["Students by AY", [[bi("ay"), bi("intake"), bi("registered"), bi("enrolledN"), bi("rejSus"), bi("activeN")]].concat(AYS.map(function (r) { return [r.label, r.intake, r.newStudents, r.enrolled, r.rejected, r.active]; }))],
         ["Categories", [[bi("category"), bi("lines"), bi("amount"), bi("share")]].concat(catOrder(D.cats).map(function (c) { return [c, D.cats[c].lines, D.cats[c].amt, k.gross ? D.cats[c].amt / k.gross : 0]; }))]
       ]);
     };
@@ -931,7 +1026,14 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
         options: { maintainAspectRatio: false, plugins: { legend: { position: "bottom" }, tooltip: { callbacks: { label: function (c) { return c.dataset.label + ": $" + usd(c.raw); } } } },
           scales: { y: { ticks: { callback: function (v) { return "$" + (Math.abs(v) >= 1000 ? Math.round(v / 1000) + "k" : v); } } } } } });
     };
-    if (window.Chart) go(); else window.addEventListener("load", go, { once: true });
+    var goAy = function () {
+      chart("cAy", { type: "bar", data: { labels: AYS.map(function (r) { return [r.label, r.intake]; }),
+        datasets: [{ label: "Registered · ចុះឈ្មោះ", data: AYS.map(function (r) { return r.newStudents; }), backgroundColor: "#9fb8d6" },
+          { label: "Enrolled · ចូលរៀន", data: AYS.map(function (r) { return r.enrolled; }), backgroundColor: "#003665" },
+          { label: "Active · កំពុងសិក្សា", data: AYS.map(function (r) { return r.active; }), backgroundColor: "#e3b44a" }] },
+        options: { maintainAspectRatio: false, plugins: { legend: { position: "bottom" } }, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } } });
+    };
+    if (window.Chart) { go(); goAy(); } else window.addEventListener("load", function () { go(); goAy(); }, { once: true });
   };
   function kpiTile(k, v, s, cls) { return '<div class="kpi ' + (cls || "") + '"><div class="l">' + esc(en(k)) + '<span class="kh">' + esc(kh(k)) + '</span></div><div class="v">' + v + '</div><div class="s">' + esc(s || "") + "</div></div>"; }
   function totRow(ms) {
@@ -945,6 +1047,8 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
         .map(function (x) { return "<div>" + PL(x[0]) + "<b>" + x[1] + "</b></div>"; }).join("") + "</div>" +
       "<h4>" + esc(kh("monthly")) + " / " + esc(en("monthly")) + "</h4><table><thead><tr><th>" + PL("month") + '</th><th class="n">' + PL("netBilled") + '</th><th class="n">' + PL("collected") + '</th><th class="n">' + PL("balance") + '</th><th class="n">' + PL("collPct") + "</th></tr></thead><tbody>" +
       D.months.map(function (m) { return "<tr><td>" + MONK[+m.key.slice(5) - 1] + " / " + MON[+m.key.slice(5) - 1] + " " + m.key.slice(0, 4) + '</td><td class="n">' + usd(m.billed) + '</td><td class="n">' + usd(m.collected) + '</td><td class="n">' + usd(m.bal) + '</td><td class="n">' + (m.billed ? pct(m.pct) : "–") + "</td></tr>"; }).join("") + totRow(D.months) + "</tbody></table>" +
+      "<h4>" + esc(kh("byAy")) + " / " + esc(en("byAy")) + "</h4><table><thead><tr><th>" + PL("ay") + "</th><th>" + PL("intake") + '</th><th class="n">' + PL("registered") + '</th><th class="n">' + PL("enrolledN") + '</th><th class="n">' + PL("rejSus") + '</th><th class="n">' + PL("activeN") + "</th></tr></thead><tbody>" +
+      D.ays.map(function (r) { return "<tr><td>" + esc(r.label) + "</td><td>" + esc(r.intake || "–") + '</td><td class="n">' + int(r.newStudents) + '</td><td class="n">' + int(r.enrolled) + '</td><td class="n">' + int(r.rejected) + '</td><td class="n">' + int(r.active) + "</td></tr>"; }).join("") + "</tbody></table>" +
       "<h4>" + esc(kh("byCat")) + " / " + esc(en("byCat")) + "</h4><table><thead><tr><th>" + PL("category") + '</th><th class="n">' + PL("lines") + '</th><th class="n">' + PL("amount") + '</th><th class="n">' + PL("share") + "</th></tr></thead><tbody>" +
       catOrder(D.cats).map(function (c) { return "<tr><td>" + esc(c) + '</td><td class="n">' + int(D.cats[c].lines) + '</td><td class="n">' + usd(D.cats[c].amt) + '</td><td class="n">' + (k.gross ? pct(D.cats[c].amt / k.gross) : "–") + "</td></tr>"; }).join("") + "</tbody></table>" +
       '<div class="sign three"><div>' + PL("prepared") + "</div><div>" + PL("checkedBy") + "</div><div>" + PL("approved") + "</div></div>" + docFoot("Dashboard") + "</div>";
