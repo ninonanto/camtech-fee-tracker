@@ -212,6 +212,8 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
   }
   function feeKey(s) { return String(s || "").trim().replace(/\s+/g, " ").toLowerCase(); }
   function round2(x) { return Math.round(x * 100) / 100; }
+  /** A tuition line: category Tuition Fee, or a description starting "Tuition fee" / "Tution fee" (typo in older data). */
+  function isTuition(l) { return l.cat === "Tuition Fee" || /^\s*tu(i)?tion\s+fee/i.test(String(l.fee || "")); }
 
   /* --- schedule → study year and term group (AR by Term-Year) --- */
   function schedYear(s) { var m = String(s || "").match(/^\s*Y\s*(\d)/i); return m ? "Y" + m[1] : ""; }
@@ -355,9 +357,17 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
     });
     k.coll = k.net ? 1 - k.outstanding / k.net : 0;
     var st = M.students.filter(function (s) { return !prog || s.prog === prog; });
-    k.students = st.length;
-    k.active = st.filter(function (s) { return s.studentStatus === "Active"; }).length;
+    k.students = st.length;                                   // everyone on the list: changes only with new admissions
+    k.activeNow = st.filter(function (s) { return s.studentStatus === "Active"; }).length;
     k.rs = st.filter(function (s) { return s.rs; }).length;
+    // Active students in the selected year / month: billed a tuition fee in the period and not rejected / suspended.
+    // With Year = All and Month = All it is the number marked "Active" on the student list today.
+    k.periodBased = !!(year || month);
+    if (k.periodBased) {
+      var act = {};
+      M.lines.forEach(function (l) { if (l.reg && l.stu && !l.rs && inProg(l) && isTuition(l) && inIssue(l)) act[l.reg] = 1; });
+      k.active = Object.keys(act).length;
+    } else k.active = k.activeNow;
     // monthly: 12 months of the year, or the last 12 months when Year = All
     var months = [], y0, m0;
     if (year) { y0 = year; m0 = 1; } else { var t = new Date(Date.UTC(+M.today.slice(0, 4), +M.today.slice(5, 7) - 12, 1)); y0 = t.getUTCFullYear(); m0 = t.getUTCMonth() + 1; }
@@ -522,7 +532,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
     dash: ["Dashboard", "ផ្ទាំងសង្ខេប"], students: ["Students", "និស្សិត"], invoices: ["Invoices", "វិក្កយបត្រ"], payments: ["Payments", "ការបង់ប្រាក់"],
     rejects: ["Reject / Suspend", "បដិសេធ / ព្យួរ"], reports: ["Reports", "របាយការណ៍"], lists: ["Lists", "បញ្ជី"], admin: ["Admin", "អ្នកគ្រប់គ្រង"],
     invoice: ["Invoice", "វិក្កយបត្រ"], receipt: ["Official receipt", "បង្កាន់ដៃទទួលប្រាក់"], receipts: ["Receipts", "បង្កាន់ដៃ"],
-    studentsN: ["Students", "ចំនួននិស្សិត"], gross: ["Gross billed", "ទឹកប្រាក់វិក្កយបត្រសរុប"], disc: ["Discounts & scholarships", "ការបញ្ចុះតម្លៃ និងអាហារូបករណ៍"],
+    studentsN: ["Students", "ចំនួននិស្សិត"], activeN: ["Active students", "និស្សិតកំពុងសិក្សា"], totalStu: ["Total students", "និស្សិតសរុប"], gross: ["Gross billed", "ទឹកប្រាក់វិក្កយបត្រសរុប"], disc: ["Discounts & scholarships", "ការបញ្ចុះតម្លៃ និងអាហារូបករណ៍"],
     received: ["Received in period", "ប្រាក់ទទួលបានក្នុងកំឡុងពេល"], outstanding: ["Outstanding", "ប្រាក់នៅជំពាក់"], coll: ["Collection rate", "អត្រាប្រមូលប្រាក់"],
     overdue: ["Overdue", "ហួសកាលកំណត់"], paid: ["Paid", "បានបង់"], unpaid: ["Unpaid", "មិនទាន់បង់"], applied: ["Applied", "បានអនុវត្ត"], check: ["Check price", "ពិនិត្យតម្លៃ"],
     month: ["Month", "ខែ"], year: ["Year", "ឆ្នាំ"], prog: ["Programme", "កម្មវិធីសិក្សា"], major: ["Major", "ជំនាញ"], intake: ["Intake", "ជំនាន់"], gender: ["Gender", "ភេទ"],
@@ -880,7 +890,8 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
       '<label class="f">' + L("prog") + '<select id="dfP">' + opts([["All", "All"]].concat(progs()), f.prog) + "</select></label>" +
       '<button class="btn" id="dPrint"><i class="ti ti-printer"></i> Print</button><button class="btn" id="dXls"><i class="ti ti-file-spreadsheet"></i> Excel</button></div></div>' +
       '<div class="kpis">' +
-      kpiTile("studentsN", int(k.students), "Active " + int(k.active) + " · Rejected/sus " + int(k.rs)) +
+      kpiTile("totalStu", int(k.students), "On the student list · rejected/suspended " + int(k.rs)) +
+      kpiTile("activeN", int(k.active), k.periodBased ? "Tuition invoiced in " + (D.month ? MONL[D.month - 1] + " " : "") + (D.year || "the period") + " · " + int(k.activeNow) + " marked Active today" : "Marked Active on the student list", "ok") +
       kpiTile("gross", usd(k.gross), "Issued in period") +
       kpiTile("disc", usd(k.disc), "Issued in period") +
       kpiTile("received", usd(k.received), "By date paid", "ok") +
@@ -900,7 +911,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
     $("dPrint").onclick = function () { printDash(D, perTxt); };
     $("dXls").onclick = function () {
       exportXlsx("CamTech_Dashboard_" + today() + ".xlsx", [
-        ["Summary", [["CamTech Fee Tracker – Dashboard", perTxt], [], ["Item / ធាតុ", "Value"], [bi("studentsN"), k.students], [bi("gross"), k.gross], [bi("disc"), k.disc], [bi("received"), k.received], [bi("outstanding"), k.outstanding], ["Overdue lines", k.overdueLines], [bi("coll"), k.coll]]],
+        ["Summary", [["CamTech Fee Tracker – Dashboard", perTxt], [], ["Item / ធាតុ", "Value"], [bi("totalStu"), k.students], [bi("activeN") + (k.periodBased ? " (tuition invoiced in period)" : " (marked Active)"), k.active], [bi("gross"), k.gross], [bi("disc"), k.disc], [bi("received"), k.received], [bi("outstanding"), k.outstanding], ["Overdue lines", k.overdueLines], [bi("coll"), k.coll]]],
         ["Monthly", [[bi("month"), bi("netBilled"), bi("collected"), bi("balance"), bi("collPct")]].concat(D.months.map(function (m) { return [m.key, m.billed, m.collected, m.bal, m.pct]; }))],
         ["Categories", [[bi("category"), bi("lines"), bi("amount"), bi("share")]].concat(catOrder(D.cats).map(function (c) { return [c, D.cats[c].lines, D.cats[c].amt, k.gross ? D.cats[c].amt / k.gross : 0]; }))]
       ]);
@@ -923,7 +934,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
   function printDash(D, perTxt) {
     var k = D.kpi;
     var h = '<div class="doc">' + docHead("dash", esc(perTxt) + " · USD") +
-      '<div class="kv">' + [["studentsN", int(k.students)], ["gross", usd(k.gross)], ["disc", usd(k.disc)], ["received", usd(k.received)], ["outstanding", usd(k.outstanding)], ["coll", pct(k.coll)], ["overdue", int(k.overdueLines) + " lines · " + usd(k.overdueAmt)]]
+      '<div class="kv">' + [["totalStu", int(k.students)], ["activeN", int(k.active)], ["gross", usd(k.gross)], ["disc", usd(k.disc)], ["received", usd(k.received)], ["outstanding", usd(k.outstanding)], ["coll", pct(k.coll)], ["overdue", int(k.overdueLines) + " lines · " + usd(k.overdueAmt)]]
         .map(function (x) { return "<div>" + PL(x[0]) + "<b>" + x[1] + "</b></div>"; }).join("") + "</div>" +
       "<h4>" + esc(kh("monthly")) + " / " + esc(en("monthly")) + "</h4><table><thead><tr><th>" + PL("month") + '</th><th class="n">' + PL("netBilled") + '</th><th class="n">' + PL("collected") + '</th><th class="n">' + PL("balance") + '</th><th class="n">' + PL("collPct") + "</th></tr></thead><tbody>" +
       D.months.map(function (m) { return "<tr><td>" + MONK[+m.key.slice(5) - 1] + " / " + MON[+m.key.slice(5) - 1] + " " + m.key.slice(0, 4) + '</td><td class="n">' + usd(m.billed) + '</td><td class="n">' + usd(m.collected) + '</td><td class="n">' + usd(m.bal) + '</td><td class="n">' + (m.billed ? pct(m.pct) : "–") + "</td></tr>"; }).join("") + totRow(D.months) + "</tbody></table>" +
