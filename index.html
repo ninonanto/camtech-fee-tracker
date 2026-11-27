@@ -320,28 +320,29 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
       s.discPct = s.grossPos ? 1 - s.billed / s.grossPos : 0;
       s.enrol = basis === "Tuition line" ? (s.tuiLines > 0 ? 1 : 0) : basis === "Admin fee paid" ? (s.admPaid > 0 ? 1 : 0) : (s.tuiLines + s.admPaid > 0 ? 1 : 0);
     });
-    return { today: today, terms: terms, basis: basis, plans: plans, students: students, stuMap: stuMap, lines: lines, feeMap: feeMap, rsMap: rsMap };
+    return { today: today, terms: terms, basis: basis, plans: plans, ayStart: isNum(set.ayStart) ? Number(set.ayStart) : 9, intakeBase: isNum(set.intakeBase) ? Number(set.intakeBase) : 2014, students: students, stuMap: stuMap, lines: lines, feeMap: feeMap, rsMap: rsMap };
   }
 
   /* ------------------------------ Dashboard (DB-Checking) ------------------------------ */
+  /* Academic year: starts on the 1st of M.ayStart (default September). Intake N = academic year (intakeBase + N). */
+  function ayOf(ymd, startMonth) { var y = +String(ymd).slice(0, 4), m = +String(ymd).slice(5, 7); return m >= (startMonth || 9) ? y : y - 1; }
+  function ayLabel(y) { return y + "-" + (y + 1); }
   function dashboard(M, f) {
     f = f || {};
-    var year = f.year === "Auto" ? +M.today.slice(0, 4) : (f.year === "All" || !f.year ? 0 : +f.year);
+    var S = M.ayStart || 9;
+    var ay = f.ay === "Auto" ? ayOf(M.today, S) : (f.ay === "All" || !f.ay ? 0 : +f.ay);
     var month = f.month === "Auto" ? +M.today.slice(5, 7) : (f.month === "All" || !f.month ? 0 : +f.month);
+    var year = ay;   // kept for callers that read D.year
     var prog = f.prog && f.prog !== "All" ? f.prog : "";
     function inProg(l) { return !prog || l.prog === prog; }
-    function inIssue(l) {
-      if (!l.issue) return false;
-      if (year && +l.issue.slice(0, 4) !== year) return false;
-      if (month && +l.issue.slice(5, 7) !== month) return false;
+    function inPeriod(d) {
+      if (!d) return false;
+      if (ay && ayOf(d, S) !== ay) return false;
+      if (month && +d.slice(5, 7) !== month) return false;
       return true;
     }
-    function inPaid(l) {
-      if (!l.paidDate) return false;
-      if (year && +l.paidDate.slice(0, 4) !== year) return false;
-      if (month && +l.paidDate.slice(5, 7) !== month) return false;
-      return true;
-    }
+    function inIssue(l) { return inPeriod(l.issue); }
+    function inPaid(l) { return inPeriod(l.paidDate); }
     var k = { gross: 0, disc: 0, received: 0, outstanding: 0, net: 0, overdueLines: 0, overdueAmt: 0 };
     var cats = {};
     M.lines.forEach(function (l) {
@@ -370,7 +371,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
     } else k.active = k.activeNow;
     // monthly: 12 months of the year, or the last 12 months when Year = All
     var months = [], y0, m0;
-    if (year) { y0 = year; m0 = 1; } else { var t = new Date(Date.UTC(+M.today.slice(0, 4), +M.today.slice(5, 7) - 12, 1)); y0 = t.getUTCFullYear(); m0 = t.getUTCMonth() + 1; }
+    if (ay) { y0 = ay; m0 = S; } else { var t = new Date(Date.UTC(+M.today.slice(0, 4), +M.today.slice(5, 7) - 12, 1)); y0 = t.getUTCFullYear(); m0 = t.getUTCMonth() + 1; }
     for (var i = 0; i < 12; i++) { var mm = (m0 - 1 + i) % 12 + 1, yy = y0 + Math.floor((m0 - 1 + i) / 12); months.push({ key: yy + "-" + ("0" + mm).slice(-2), billed: 0, collected: 0 }); }
     var mIdx = {}; months.forEach(function (m, i) { mIdx[m.key] = i; });
     M.lines.forEach(function (l) {
@@ -384,7 +385,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
     M.lines.forEach(function (l) { if (inProg(l) && l.st === "Overdue" && l.reg) od[l.reg] = (od[l.reg] || 0) + l.bal; });
     var topOd = Object.keys(od).map(function (r) { var s = M.stuMap[r]; return { reg: r, name: s ? s.name : "", major: s ? s.major : "", intake: s ? s.intake : "", amt: od[r] }; })
       .sort(function (a, b) { return b.amt - a.amt; }).slice(0, 10);
-    return { kpi: k, months: months, cats: cats, topOverdue: topOd, year: year, month: month, prog: prog };
+    return { kpi: k, months: months, cats: cats, topOverdue: topOd, year: year, ay: ay, ayStart: S, month: month, prog: prog };
   }
 
   /* ------------------------------ Intake report (Report VP) ------------------------------ */
@@ -504,7 +505,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
     return p + ("000000000" + (max + 1)).slice(-Math.max(digits || 5, String(max + 1).length));
   }
 
-  var API = { build: build, dashboard: dashboard, intakeReport: intakeReport, ar: ar, daily: daily, checks: checks, nextNo: nextNo,
+  var API = { ayOf: ayOf, ayLabel: ayLabel, build: build, dashboard: dashboard, intakeReport: intakeReport, ar: ar, daily: daily, checks: checks, nextNo: nextNo,
     schedYear: schedYear, schedTerm: schedTerm, addDays: addDays, round2: round2, DISC_CAT: DISC_CAT };
   if (typeof module !== "undefined" && module.exports) module.exports = API; else root.CT = API;
 })(this);
@@ -535,7 +536,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
     studentsN: ["Students", "ចំនួននិស្សិត"], activeN: ["Active students", "និស្សិតកំពុងសិក្សា"], totalStu: ["Total students", "និស្សិតសរុប"], gross: ["Gross billed", "ទឹកប្រាក់វិក្កយបត្រសរុប"], disc: ["Discounts & scholarships", "ការបញ្ចុះតម្លៃ និងអាហារូបករណ៍"],
     received: ["Received in period", "ប្រាក់ទទួលបានក្នុងកំឡុងពេល"], outstanding: ["Outstanding", "ប្រាក់នៅជំពាក់"], coll: ["Collection rate", "អត្រាប្រមូលប្រាក់"],
     overdue: ["Overdue", "ហួសកាលកំណត់"], paid: ["Paid", "បានបង់"], unpaid: ["Unpaid", "មិនទាន់បង់"], applied: ["Applied", "បានអនុវត្ត"], check: ["Check price", "ពិនិត្យតម្លៃ"],
-    month: ["Month", "ខែ"], year: ["Year", "ឆ្នាំ"], prog: ["Programme", "កម្មវិធីសិក្សា"], major: ["Major", "ជំនាញ"], intake: ["Intake", "ជំនាន់"], gender: ["Gender", "ភេទ"],
+    month: ["Month", "ខែ"], year: ["Year", "ឆ្នាំ"], ay: ["Academic year", "ឆ្នាំសិក្សា"], prog: ["Programme", "កម្មវិធីសិក្សា"], major: ["Major", "ជំនាញ"], intake: ["Intake", "ជំនាន់"], gender: ["Gender", "ភេទ"],
     category: ["Category", "ប្រភេទ"], lines: ["Lines", "ចំនួនជួរ"], amount: ["Amount", "ចំនួនទឹកប្រាក់"], share: ["Share", "ភាគរយ"], balance: ["Balance", "សមតុល្យ"],
     netBilled: ["Net billed", "វិក្កយបត្រសុទ្ធ"], collected: ["Collected", "ប្រាក់ប្រមូលបាន"], collPct: ["Collected %", "ភាគរយប្រមូលបាន"],
     schol: ["Scholarship", "អាហារូបករណ៍"], fullPay: ["Full pay", "បង់ពេញ"], target: ["Target", "គោលដៅ"], actual: ["Actual", "ជាក់ស្តែង"], gap: ["Gap to target", "គម្លាតពីគោលដៅ"],
@@ -639,10 +640,11 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
   function rowsToObj(t) { return (t && t.rows || []).map(function (r) { var o = {}; t.cols.forEach(function (c, i) { o[c] = r[i]; }); return o; }); }
   function buildCfg(raw) {
     var c = { org: "CamTech University", orgKh: "", address: "", phone: "", email: "", tin: "", terms: 14, rate: 4100, basis: "Enrolled (either)",
-      invPrefix: "C", rcpPrefix: "A", regPrefix: "Reg.", digits: 5, lists: {}, payOpts: [], rcpNote: "" };
+      invPrefix: "C", rcpPrefix: "A", regPrefix: "Reg.", digits: 5, lists: {}, payOpts: [], rcpNote: "", ayStart: 9, intake1: 2015 };
     var map = { "Organisation (English)": "org", "Organisation (Khmer)": "orgKh", "Address": "address", "Phone": "phone", "Email": "email", "VAT TIN": "tin",
       "Payment terms (days)": "terms", "Default exchange rate (KHR per USD)": "rate", "Enrolment count basis": "basis",
-      "Invoice prefix": "invPrefix", "Receipt prefix": "rcpPrefix", "Reg No prefix": "regPrefix", "Digits": "digits" };
+      "Invoice prefix": "invPrefix", "Receipt prefix": "rcpPrefix", "Reg No prefix": "regPrefix", "Digits": "digits",
+      "Academic year start month": "ayStart", "Academic year of Intake 1": "intake1" };
     (raw.settings || []).forEach(function (r) {
       var g = r[0], it = r[1], v = r[2];
       if ((g === "General" || g === "Numbering") && map[it] && v !== "" && v !== null) c[map[it]] = v;
@@ -668,7 +670,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
   }
   function recalc() {
     S.M = CT.build({ students: S.students, lines: S.lines, fees: S.fees, schools: S.schools, rejects: S.rejects,
-      settings: { terms: S.cfg.terms, basis: S.cfg.basis, plans: S.cfg.plans } }, today());
+      settings: { terms: S.cfg.terms, basis: S.cfg.basis, plans: S.cfg.plans, ayStart: num(S.cfg.ayStart) || 9, intakeBase: (num(S.cfg.intake1) || 2015) - 1 } }, today());
     // invoices and receipts grouped from the lines
     var inv = {}, rcp = {};
     S.M.lines.forEach(function (l) {
@@ -869,29 +871,34 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
     Chart.defaults.font.family = css.getPropertyValue("--font-body"); Chart.defaults.color = css.getPropertyValue("--muted");
     CHARTS[id] = new Chart(el, cfg);
   }
-  function years() {
-    var ys = {}; S.M.lines.forEach(function (l) { if (l.issue) ys[l.issue.slice(0, 4)] = 1; if (l.paidDate) ys[l.paidDate.slice(0, 4)] = 1; });
-    return Object.keys(ys).sort().reverse();
+  /** Academic years found in the data, newest first: [startYear, "2026-2027 · Intake 12"] */
+  function acYears() {
+    var st = S.M.ayStart, ys = {};
+    S.M.lines.forEach(function (l) { if (l.issue) ys[CT.ayOf(l.issue, st)] = 1; if (l.paidDate) ys[CT.ayOf(l.paidDate, st)] = 1; });
+    ys[CT.ayOf(today(), st)] = 1;
+    return Object.keys(ys).map(Number).sort(function (a, b) { return b - a; }).map(function (y) { return [String(y), ayText(y)]; });
   }
+  function ayText(y) { var n = y - S.M.intakeBase; return CT.ayLabel(y) + (n >= 1 ? " · Intake " + n : ""); }
+  function monthsInAy() { var st = S.M.ayStart, o = []; for (var i = 0; i < 12; i++) { var m = (st - 1 + i) % 12; o.push([String(m + 1), MONL[m] + " · " + MONK[m]]); } return o; }
   function progs() { return uniq(S.M.students.map(function (s) { return s.prog; }).concat(S.majors.map(function (m) { return m.prog; }))).sort(natSort); }
   function catOrder(cats) {
     var order = (S.cfg.lists["Category order"] || []).slice();
     Object.keys(cats).forEach(function (k) { if (order.indexOf(k) < 0) order.push(k); });
     return order.filter(function (k) { return cats[k]; });
   }
-  function dashFilter() { return S.cache.dashF || (S.cache.dashF = { year: today().slice(0, 4), month: "All", prog: "All" }); }
+  function dashFilter() { return S.cache.dashF || (S.cache.dashF = { ay: "Auto", month: "All", prog: "All" }); }
   RENDER.dash = function (el) {
     var f = dashFilter(), D = CT.dashboard(S.M, f), k = D.kpi;
-    var perTxt = (D.year ? D.year : "All years") + (D.month ? " · " + MONL[D.month - 1] : " · all months") + (D.prog ? " · " + D.prog : "");
+    var perTxt = (D.ay ? "Academic year " + ayText(D.ay) : "All academic years") + (D.month ? " · " + MONL[D.month - 1] : " · all months") + (D.prog ? " · " + D.prog : "");
     el.innerHTML =
       '<div class="head"><div><h2>' + L("dash") + '</h2><p>USD · ' + esc(perTxt) + " · updated " + fd(today()) + '</p></div><div class="bar">' +
-      '<label class="f">' + L("year") + '<select id="dfY">' + opts([["Auto", "This year"], ["All", "All"]].concat(years()), f.year) + "</select></label>" +
-      '<label class="f">' + L("month") + '<select id="dfM">' + opts([["All", "All"], ["Auto", "This month"]].concat(MONL.map(function (m, i) { return [String(i + 1), m + " · " + MONK[i]]; })), f.month) + "</select></label>" +
+      '<label class="f">' + L("ay") + '<select id="dfY">' + opts([["Auto", "This academic year (" + CT.ayLabel(CT.ayOf(today(), S.M.ayStart)) + ")"], ["All", "All"]].concat(acYears()), f.ay) + "</select></label>" +
+      '<label class="f">' + L("month") + '<select id="dfM">' + opts([["All", "All"], ["Auto", "This month"]].concat(monthsInAy()), f.month) + "</select></label>" +
       '<label class="f">' + L("prog") + '<select id="dfP">' + opts([["All", "All"]].concat(progs()), f.prog) + "</select></label>" +
       '<button class="btn" id="dPrint"><i class="ti ti-printer"></i> Print</button><button class="btn" id="dXls"><i class="ti ti-file-spreadsheet"></i> Excel</button></div></div>' +
       '<div class="kpis">' +
       kpiTile("totalStu", int(k.students), "On the student list · rejected/suspended " + int(k.rs)) +
-      kpiTile("activeN", int(k.active), k.periodBased ? "Tuition invoiced in " + (D.month ? MONL[D.month - 1] + " " : "") + (D.year || "the period") + " · " + int(k.activeNow) + " marked Active today" : "Marked Active on the student list", "ok") +
+      kpiTile("activeN", int(k.active), k.periodBased ? "Tuition invoiced in " + (D.month ? MONL[D.month - 1] + " of " : "") + (D.ay ? "AY " + CT.ayLabel(D.ay) : "the period") + " · " + int(k.activeNow) + " marked Active today" : "Marked Active on the student list", "ok") +
       kpiTile("gross", usd(k.gross), "Issued in period") +
       kpiTile("disc", usd(k.disc), "Issued in period") +
       kpiTile("received", usd(k.received), "By date paid", "ok") +
@@ -906,7 +913,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
       "</tbody></table></div>" +
       '<div class="card"><h3>' + L("topOd") + "</h3>" + (D.topOverdue.length ? '<table><thead><tr><th>' + L("reg") + "</th><th>" + L("name") + "</th><th>" + L("intake") + '</th><th class="n">' + L("overdue") + "</th></tr></thead><tbody>" +
       D.topOverdue.map(function (r) { return '<tr class="click" data-stu="' + esc(r.reg) + '"><td>' + esc(r.reg) + "</td><td>" + esc(r.name) + '<div class="small muted">' + esc(r.major) + "</div></td><td>" + esc(r.intake) + '</td><td class="n neg">' + usd(r.amt) + "</td></tr>"; }).join("") + "</tbody></table>" : '<div class="empty">No overdue balances.</div>') + "</div></div></div>";
-    function upd() { S.cache.dashF = { year: $("dfY").value, month: $("dfM").value, prog: $("dfP").value }; render(); }
+    function upd() { S.cache.dashF = { ay: $("dfY").value, month: $("dfM").value, prog: $("dfP").value }; render(); }
     ["dfY", "dfM", "dfP"].forEach(function (id) { $(id).onchange = upd; });
     $("dPrint").onclick = function () { printDash(D, perTxt); };
     $("dXls").onclick = function () {
@@ -1466,7 +1473,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
     var I = CT.intakeReport(S.M, sel, target), pc = planCols();
     var cols = [["reserved", en("reserved")], ["admin", en("adminFee")]].concat(pc);
     var gapTot = I.targetTotal - I.actual.totalPlans;
-    el.innerHTML = '<div class="card tight bar" style="margin-top:10px"><label class="f">' + L("intake") + '<select id="riI">' + opts(["All intakes"].concat(ints).concat(intakes().filter(function (i) { return !/intake/i.test(i); })), sel) + "</select></label>" +
+    el.innerHTML = '<div class="card tight bar" style="margin-top:10px"><label class="f">' + L("intake") + '<select id="riI">' + opts(["All intakes"].concat(ints).concat(intakes().filter(function (i) { return !/intake/i.test(i); })).map(function (i) { var m = String(i).match(/^Intake\s*(\d+)$/i); return [i, m ? i + " · AY " + CT.ayLabel(S.M.intakeBase + Number(m[1])) : i]; }), sel) + "</select></label>" +
       (lvl("lists") >= 2 && sel !== "All intakes" ? '<button class="btn" id="riT"><i class="ti ti-target"></i> Set targets</button>' : "") +
       '<button class="btn" id="riP"><i class="ti ti-printer"></i> Print</button><button class="btn" id="riX"><i class="ti ti-file-spreadsheet"></i> Excel</button>' +
       '<span class="small muted">Count basis for “enrolled”: ' + esc(S.cfg.basis) + "</span></div>" +
@@ -1480,7 +1487,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
     $("riI").onchange = function () { S.cache.repInt = $("riI").value; render(); };
     if ($("riT")) $("riT").onclick = function () { targetForm(sel, tg); };
     $("riP").onclick = function () {
-      printHtml('<div class="doc land">' + docHead("intakeRep", esc(sel) + " · count basis: " + esc(S.cfg.basis)) +
+      printHtml('<div class="doc land">' + docHead("intakeRep", esc(sel) + (/^Intake\s*\d+$/i.test(sel) ? " · " + esc(kh("ay")) + " / Academic year " + CT.ayLabel(S.M.intakeBase + Number(sel.replace(/\D/g, ""))) : "") + " · count basis: " + esc(S.cfg.basis)) +
         '<div class="kv">' + [["enrolledBefore", I.head.before], ["rejSus", I.head.rejected], ["finalEnr", I.head.final], ["gap", gapTot]].map(function (x) { return "<div>" + PL(x[0]) + "<b>" + int(x[1]) + "</b></div>"; }).join("") + "</div>" +
         "<h4>1. គោលដៅ និងជាក់ស្តែងតាមប្រភេទអាហារូបករណ៍ / Target vs actual by scholarship plan</h4>" + sec1(I, cols, true) +
         "<h4>2. ចុះឈ្មោះចុងក្រោយតាមជំនាញ / Final enrolled by major × scholarship plan</h4>" + sec2(I, pc, true) +
