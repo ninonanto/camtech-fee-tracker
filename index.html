@@ -265,6 +265,9 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
   }
   function feeKey(s) { return String(s || "").trim().replace(/\s+/g, " ").toLowerCase(); }
   function round2(x) { return Math.round(x * 100) / 100; }
+  /** Negative lines: "Discount" in the description (early-payment 3%, Discount 30%…) = discount; everything else
+   *  (scholarships, assistantships, credits) = scholarship. */
+  function isDiscount(l) { return /discount/i.test(String(l.fee || "")); }
   /** A tuition line: category Tuition Fee, or a description starting "Tuition fee" / "Tution fee" (typo in older data). */
   function isTuition(l) { return l.cat === "Tuition Fee" || /^\s*tu(i)?tion\s+fee/i.test(String(l.fee || "")); }
 
@@ -317,7 +320,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
       var h = s.hs ? hsMap[feeKey(s.hs)] : null;
       o.hsType = !String(s.hs || "").trim() ? "Not recorded" : h ? (h.type || "") : "Not in list";
       o.hsGroup = !String(s.hs || "").trim() ? "Not recorded" : h ? (h.group || "") : "Not in list";
-      o.billed = 0; o.paid = 0; o.bal = 0; o.grossPos = 0; o.invoices = 0; o.receipts = 0; o.lastPaid = ""; o.tuiLines = 0; o.admPaid = 0; o.overdue = 0;
+      o.billed = 0; o.paid = 0; o.bal = 0; o.grossPos = 0; o.invoices = 0; o.receipts = 0; o.lastPaid = ""; o.tuiLines = 0; o.tuiPaid = 0; o.admPaid = 0; o.overdue = 0;
       students.push(o); stuMap[s.reg] = o;
     });
 
@@ -363,7 +366,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
         s.billed += o.total; s.paid += o.paidN; s.bal += o.bal; if (o.total > 0) s.grossPos += o.total;
         if (num(o.line) === 1) { s.invoices++; if (o.rcp) s.receipts++; }
         if (o.paidDate && o.paidDate > s.lastPaid) s.lastPaid = o.paidDate;
-        if (o.cat === "Tuition Fee") s.tuiLines++;
+        if (o.cat === "Tuition Fee") { s.tuiLines++; if (o.paidDate) s.tuiPaid++; }
         if (o.cat === "Administrative Fee" && o.paidDate) s.admPaid++;
         if (o.st === "Overdue") s.overdue += o.bal;
       }
@@ -396,12 +399,13 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
     }
     function inIssue(l) { return inPeriod(l.issue); }
     function inPaid(l) { return inPeriod(l.paidDate); }
-    var k = { gross: 0, disc: 0, received: 0, outstanding: 0, net: 0, overdueLines: 0, overdueAmt: 0 };
+    var k = { gross: 0, disc: 0, discount: 0, schol: 0, received: 0, outstanding: 0, net: 0, overdueLines: 0, overdueAmt: 0 };
     var cats = {};
     M.lines.forEach(function (l) {
       if (!inProg(l)) return;
       if (inIssue(l)) {
-        if (l.total > 0) k.gross += l.total; else if (l.total < 0) k.disc += l.total;
+        if (l.total > 0) k.gross += l.total;
+        else if (l.total < 0) { k.disc += l.total; if (isDiscount(l)) k.discount += l.total; else k.schol += l.total; }
         k.net += l.total; k.outstanding += l.bal;
         if (l.st === "Overdue") { k.overdueLines++; k.overdueAmt += l.bal; }
         var c = cats[l.cat || "(no category)"] || (cats[l.cat || "(no category)"] = { lines: 0, amt: 0 });
@@ -433,6 +437,28 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
     var topOd = Object.keys(od).map(function (r) { var s = M.stuMap[r]; return { reg: r, name: s ? s.name : "", major: s ? s.major : "", intake: s ? s.intake : "", amt: od[r] }; })
       .sort(function (a, b) { return b.amt - a.amt; }).slice(0, 10);
     return { kpi: k, months: months, cats: cats, topOverdue: topOd, year: year, ay: ay, ayStart: S, month: month, prog: prog };
+  }
+
+  /* ------------------------------ Students by major and college year ------------------------------ */
+  /** basis "active" = Status Active on the Students tab; "enrolled" = paid the admin fee, not rejected / suspended;
+   *  "all" = everyone on the list. Returns majors sorted by size, with counts per college year (Y1–Y4). */
+  function majorMix(M, basis, prog) {
+    var YRS = ["Y1", "Y2", "Y3", "Y4"], by = {}, total = 0;
+    M.students.forEach(function (s) {
+      if (prog && s.prog !== prog) return;
+      if (basis === "active" && s.studentStatus !== "Active") return;
+      if (basis === "enrolled" && !(s.admPaid >= 1 && !s.rs)) return;
+      var mj = String(s.major || "").trim();
+      if (!mj || mj === "0" || /^n\/?a$/i.test(mj)) mj = "Not recorded";
+      var y = String(s.curYear || "").toUpperCase().replace(/\s+/g, "").replace(/^YEAR/, "Y");
+      if (/^[1-4]$/.test(y)) y = "Y" + y;
+      if (YRS.indexOf(y) < 0) y = "Not set";
+      var r = by[mj] || (by[mj] = { major: mj, total: 0, Y1: 0, Y2: 0, Y3: 0, Y4: 0, "Not set": 0 });
+      r.total++; r[y]++; total++;
+    });
+    var rows = Object.keys(by).map(function (k) { return by[k]; }).sort(function (a, b) { return b.total - a.total || (a.major < b.major ? -1 : 1); });
+    rows.forEach(function (r) { r.pct = total ? r.total / total : 0; });
+    return { rows: rows, total: total, years: YRS.concat(["Not set"]) };
   }
 
   /* ------------------------------ Students by academic year (last N) ------------------------------ */
@@ -485,6 +511,16 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
       if (l.adm1 && l.rs) row.rejected++;
       if (l.adm1 && !l.rs) { row.total++; row[pk] = (row[pk] || 0) + 1; }
     });
+    // Actual by plan = final enrolled students (admin fee paid, not rejected / suspended), grouped by their scholarship plan,
+    // so the plan columns add up to "Final enrolled" and Gap = Target − Final enrolled.
+    plans.forEach(function (p) { actual[String(p)] = 0; }); actual.full = 0;
+    var noTui = 0;
+    M.students.forEach(function (s) {
+      if (!inI(s.intake) || !(s.admPaid >= 1) || s.rs) return;
+      actual[planOf(s.schol)]++;
+      if (!s.tuiPaid) noTui++;
+    });
+    actual.noTuition = noTui;
     actual.totalPlans = plans.reduce(function (a, p) { return a + actual[String(p)]; }, 0) + actual.full;
     var tgt = target || {};
     var tgtTotal = plans.reduce(function (a, p) { return a + num(tgt[String(p)]); }, 0) + num(tgt.full);
@@ -625,7 +661,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
     return p + ("000000000" + (max + 1)).slice(-Math.max(digits || 5, String(max + 1).length));
   }
 
-  var API = { arAging: arAging, AGING: AGING, ayOf: ayOf, ayLabel: ayLabel, studentsByAy: studentsByAy, build: build, dashboard: dashboard, intakeReport: intakeReport, ar: ar, daily: daily, checks: checks, nextNo: nextNo,
+  var API = { majorMix: majorMix, isDiscount: isDiscount, arAging: arAging, AGING: AGING, ayOf: ayOf, ayLabel: ayLabel, studentsByAy: studentsByAy, build: build, dashboard: dashboard, intakeReport: intakeReport, ar: ar, daily: daily, checks: checks, nextNo: nextNo,
     schedYear: schedYear, schedTerm: schedTerm, addDays: addDays, round2: round2, DISC_CAT: DISC_CAT };
   if (typeof module !== "undefined" && module.exports) module.exports = API; else root.CT = API;
 })(this);
@@ -653,7 +689,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
     dash: ["Dashboard", "ផ្ទាំងសង្ខេប"], students: ["Students", "និស្សិត"], invoices: ["Invoices", "វិក្កយបត្រ"], payments: ["Payments", "ការបង់ប្រាក់"],
     rejects: ["Reject / Suspend", "បដិសេធ / ព្យួរ"], reports: ["Reports", "របាយការណ៍"], lists: ["Lists", "បញ្ជី"], admin: ["Admin", "អ្នកគ្រប់គ្រង"],
     invoice: ["Invoice", "វិក្កយបត្រ"], receipt: ["Official receipt", "បង្កាន់ដៃទទួលប្រាក់"], receipts: ["Receipts", "បង្កាន់ដៃ"],
-    studentsN: ["Students", "ចំនួននិស្សិត"], activeN: ["Active students", "និស្សិតកំពុងសិក្សា"], byAy: ["Students by academic year", "និស្សិតតាមឆ្នាំសិក្សា"], registered: ["Registered", "ចុះឈ្មោះ"], enrolledN: ["Enrolled", "ចូលរៀន"], rejShort: ["Rej./sus.", "បដិសេធ/ព្យួរ"], activeS: ["Active", "កំពុងសិក្សា"], tuiBilled: ["Tuition billed", "បានចេញវិក្កយបត្រថ្លៃសិក្សា"], totalStu: ["Total students", "និស្សិតសរុប"], gross: ["Gross billed", "ទឹកប្រាក់វិក្កយបត្រសរុប"], disc: ["Discounts & scholarships", "ការបញ្ចុះតម្លៃ និងអាហារូបករណ៍"],
+    studentsN: ["Students", "ចំនួននិស្សិត"], activeN: ["Active students", "និស្សិតកំពុងសិក្សា"], byAy: ["Students by academic year", "និស្សិតតាមឆ្នាំសិក្សា"], registered: ["Registered", "ចុះឈ្មោះ"], enrolledN: ["Enrolled", "ចូលរៀន"], rejShort: ["Rej./sus.", "បដិសេធ/ព្យួរ"], activeS: ["Active", "កំពុងសិក្សា"], tuiBilled: ["Tuition billed", "បានចេញវិក្កយបត្រថ្លៃសិក្សា"], totalStu: ["Total students", "និស្សិតសរុប"], gross: ["Gross billed", "ទឹកប្រាក់វិក្កយបត្រសរុប"], disc: ["Discounts & scholarships", "ការបញ្ចុះតម្លៃ និងអាហារូបករណ៍"], discOnly: ["Discounts", "ការបញ្ចុះតម្លៃ"], scholOnly: ["Scholarships", "អាហារូបករណ៍"], byMajor: ["Students by major", "និស្សិតតាមជំនាញ"], byMajorYr: ["Students by major and college year", "និស្សិតតាមជំនាញ និងឆ្នាំសិក្សា"], basis: ["Count", "រាប់"], emailN: ["Email alerts", "ការជូនដំណឹងតាមអ៊ីមែល"], emailLog: ["Sent emails", "អ៊ីមែលដែលបានផ្ញើ"], alerts: ["Email alerts", "ជូនដំណឹងតាមអ៊ីមែល"],
     received: ["Received in period", "ប្រាក់ទទួលបានក្នុងកំឡុងពេល"], outstanding: ["Outstanding", "ប្រាក់នៅជំពាក់"], coll: ["Collection rate", "អត្រាប្រមូលប្រាក់"],
     overdue: ["Overdue", "ហួសកាលកំណត់"], paid: ["Paid", "បានបង់"], unpaid: ["Unpaid", "មិនទាន់បង់"], applied: ["Applied", "បានអនុវត្ត"], check: ["Check price", "ពិនិត្យតម្លៃ"],
     month: ["Month", "ខែ"], year: ["Year", "ឆ្នាំ"], ay: ["Academic year", "ឆ្នាំសិក្សា"], prog: ["Programme", "កម្មវិធីសិក្សា"], major: ["Major", "ជំនាញ"], intake: ["Intake", "ជំនាន់"], gender: ["Gender", "ភេទ"],
@@ -734,6 +770,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
   /* ---------------- API ---------------- */
   function api(payload) {
     payload.token = S.token;
+    if (S.stale && /^(save|void|clear|send)/.test(payload.action || "")) return Promise.reject({ code: "stale" });
     if (API_URL.indexOf("http") !== 0) return Promise.reject({ code: "nourl" });
     return fetch(API_URL, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(payload), redirect: "follow" })
       .then(function (r) { if (!r.ok) throw { code: "http", detail: r.status }; return r.json(); })
@@ -764,6 +801,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
     if (e.code === "invalid" || e.code === "conflict") return e.detail;
     if (e.code === "forbidden") return "Your role can't do this. Ask an Admin.";
     if (e.code === "signed_out") return "Your sign-in has ended. Sign in again.";
+    if (e.code === "stale") return "Still loading the latest data from the Sheet — try again in a few seconds.";
     if (e.code === "busy") return "The Sheet is busy with another save. Wait a few seconds and try again.";
     if (e.code === "nourl") return "This page is not connected yet: paste the web app URL into API_URL in index.html (see SETUP-GUIDE.md).";
     if (e.code === "http") return "Could not reach the Google Sheet (error " + e.detail + "). Check the web app URL and that it is deployed for “Anyone”.";
@@ -781,7 +819,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
   function buildCfg(raw) {
     var c = { org: "CamTech University", orgKh: "", address: "", phone: "", email: "", tin: "", terms: 14, rate: 4100, basis: "Enrolled (either)",
       invPrefix: "C", rcpPrefix: "A", regPrefix: "Reg.", digits: 5, lists: {}, payOpts: [], rcpNote: "", ayStart: 9, intake1: 2015 };
-    var map = { "Organisation (English)": "org", "Organisation (Khmer)": "orgKh", "Legal name": "legal", "Website line": "web", "Address": "address", "Phone": "phone", "Email": "email", "VAT TIN": "tin",
+    var map = { "Organisation (English)": "org", "Organisation (Khmer)": "orgKh", "Legal name": "legal", "Website line": "web", "Email signature": "mailSign", "Email CC": "mailCc", "Address": "address", "Phone": "phone", "Email": "email", "VAT TIN": "tin",
       "Payment terms (days)": "terms", "Default exchange rate (KHR per USD)": "rate", "Enrolment count basis": "basis",
       "Invoice prefix": "invPrefix", "Receipt prefix": "rcpPrefix", "Reg No prefix": "regPrefix", "Digits": "digits",
       "Academic year start month": "ayStart", "Academic year of Intake 1": "intake1" };
@@ -872,7 +910,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
     $("page").innerHTML = '<div class="head"><div><h2>' + L("dash") + '</h2><p>Loading the latest data from the Google Sheet…</p></div></div>' +
       '<div class="card loadcard"><div class="spin"></div><div style="flex:1"><div id="ldStep" style="font-weight:600">Connecting to the Google Sheet · កំពុងភ្ជាប់ទៅ Google Sheet</div>' +
       '<div class="ldbar"><span id="ldBar" style="width:8%"></span></div><div id="ldInfo" class="small muted">Starting…</div></div></div>' +
-      '<div class="kpis">' + ["totalStu", "activeN", "gross", "disc", "received", "outstanding", "coll"].map(tile).join("") + "</div>" +
+      '<div class="kpis">' + ["totalStu", "activeN", "gross", "scholOnly", "discOnly", "received", "outstanding", "coll"].map(tile).join("") + "</div>" +
       '<div class="grid g2"><div class="card"><h3>' + L("monthly") + '</h3><div class="skel" style="height:240px"></div></div><div class="card"><h3>' + L("byCat") + '</h3><div class="skel" style="height:240px"></div></div></div>';
     var t0 = Date.now();
     clearInterval(LOADT);
@@ -889,25 +927,56 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
     if ($("ldBar") && pctW) $("ldBar").style.width = pctW + "%";
     if ($("ldInfo") && info) { $("ldInfo").setAttribute("data-bytes", "1"); $("ldInfo").textContent = info; }
   }
+  /* ---------------- saved copy on this computer (IndexedDB): the page opens at once, then refreshes ---------------- */
+  // Kept only when "Keep me signed in" was ticked; removed on sign-out. Saving is blocked until the fresh data arrives.
+  function idb() {
+    return new Promise(function (res, rej) {
+      if (!window.indexedDB) { rej(); return; }
+      var r = indexedDB.open("ctft", 1);
+      r.onupgradeneeded = function () { r.result.createObjectStore("kv"); };
+      r.onsuccess = function () { res(r.result); }; r.onerror = function () { rej(r.error); };
+    });
+  }
+  function cacheGet() { return idb().then(function (db) { return new Promise(function (res) { var q = db.transaction("kv").objectStore("kv").get("boot"); q.onsuccess = function () { res(q.result || null); }; q.onerror = function () { res(null); }; }); }).catch(function () { return null; }); }
+  function cachePut(v) { return idb().then(function (db) { db.transaction("kv", "readwrite").objectStore("kv").put(v, "boot"); }).catch(function () {}); }
+  function cacheClear() { return idb().then(function (db) { db.transaction("kv", "readwrite").objectStore("kv").delete("boot"); }).catch(function () {}); }
+  function cacheAllowed() { try { return !!localStorage.getItem(LS_TOK); } catch (e) { return false; } }
+  function localToday() { var d = new Date(); return d.getFullYear() + "-" + ("0" + (d.getMonth() + 1)).slice(-2) + "-" + ("0" + d.getDate()).slice(-2); }
+
   function load(quiet) {
     setSync("busy", "Loading…");
+    var fresh = false, fromCache = false;
     if (!quiet || !S.raw) showLoading();
+    if (!quiet && !S.raw && cacheAllowed()) {
+      cacheGet().then(function (c) {
+        var who = ""; try { who = localStorage.getItem(LS_USER) || ""; } catch (e) {}
+        if (fresh || S.raw || !c || !c.raw || c.username !== who) return;
+        try {
+          clearInterval(LOADT);
+          c.raw.today = localToday(); ingest(c.raw); S.stale = true; fromCache = true; startApp();
+          setSync("busy", "Saved copy from " + c.at + " · refreshing…");
+        } catch (e) { S.raw = null; S.stale = false; fromCache = false; }
+      });
+    }
     var t0 = Date.now();
     return apiProgress({ action: "bootstrap" }, function (bytes) {
-      if (quiet && S.raw) return;
+      if ((quiet && S.raw) || fromCache) return;
       loadStep("Receiving data · កំពុងទាញយកទិន្នន័យ", Math.min(85, 50 + bytes / 60000), (bytes / 1048576).toFixed(1) + " MB received · " + Math.round((Date.now() - t0) / 1000) + " s");
     }).then(function (j) {
       loadStep("Calculating totals · កំពុងគណនា", 92, "Almost ready…");
       return new Promise(function (res) { setTimeout(function () { res(j); }, 30); });
     }).then(function (j) {
       clearInterval(LOADT);
-      ingest(j);
+      fresh = true;
+      ingest(j); S.stale = false;
       setSync("ok", "Up to date " + timeNow());
-      if (!quiet) { startApp(); }
+      if (!quiet && !fromCache) { startApp(); }
       else render();
+      if (cacheAllowed()) cachePut({ username: j.username, at: nowStr(), raw: j }); else cacheClear();
       if (j.mustChange) changePasswordDialog(true);
     }).catch(function (e) {
       clearInterval(LOADT);
+      if (fromCache) { setSync("err", "Showing the saved copy – could not refresh"); notice("Could not load the latest data: " + esc(errText(e)) + " You are looking at the copy saved on this computer; saving is switched off until Refresh works.", "bad", 12000); return; }
       handleError(e, "Loading");
       if (e && e.code !== "signed_out" && !S.raw) { $("page").innerHTML = '<div class="card empty">' + esc(errText(e)) + '<div style="margin-top:12px"><button class="btn primary" id="ldRetry"><i class="ti ti-refresh"></i> Try again</button></div></div>'; if ($("ldRetry")) $("ldRetry").onclick = function () { load(false); }; }
     });
@@ -921,7 +990,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
   }
   function signOut(msg) {
     if (S.token) api({ action: "logout" }).catch(function () {});
-    S.token = ""; S.raw = null;
+    S.token = ""; S.raw = null; S.stale = false; cacheClear();
     try { localStorage.removeItem(LS_TOK); sessionStorage.removeItem(LS_TOK); } catch (e) {}
     showLogin(msg);
   }
@@ -976,6 +1045,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
     { id: "payments", icon: "ti-cash", area: "payments" },
     { id: "rejects", icon: "ti-user-x", area: "rejects" },
     { id: "reports", icon: "ti-report-analytics", area: "reports" },
+    { id: "alerts", icon: "ti-mail", area: "email" },
     { id: "lists", icon: "ti-list-details", area: "lists" },
     { id: "admin", icon: "ti-settings", area: "admin" }
   ];
@@ -1054,8 +1124,13 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
       '<div class="dt"><div class="k">' + esc(kh(titleKey)) + '</div><div class="e">' + esc(en(titleKey).toUpperCase()) + "</div>" + (sub ? '<div class="small" style="margin-top:4px">' + sub + "</div>" : "") + "</div>";
   }
   function docFoot(code) { return '<div class="foot"><span>' + esc(code || "") + "</span><span>" + esc(kh("generated")) + " / " + esc(en("generated")) + ": " + esc(nowStr()) + " · " + esc(S.raw.user) + "</span></div>"; }
-  function printHtml(html, landscape, size) {
+  /** File name for "Save as PDF": the browser uses the page title. */
+  function fileTitle(s) { return String(s || "").replace(/[\\/:*?"<>|#%]+/g, "-").replace(/\s+/g, " ").trim().slice(0, 120); }
+  function printHtml(html, landscape, size, title) {
     var p = $("print");
+    var oldTitle = document.title;
+    document.title = fileTitle(title || "CamTech " + today());
+    window.addEventListener("afterprint", function () { document.title = oldTitle; }, { once: true });
     p.innerHTML = html;
     var st = $("pageStyle"); if (st) st.remove();
     st = document.createElement("style"); st.id = "pageStyle"; st.textContent = "@media print { @page { size: " + (size || "A4") + " " + (landscape ? "landscape" : "portrait") + "; margin: " + (size === "A5" ? "7mm" : "10mm") + "; } }"; document.head.appendChild(st);
@@ -1096,6 +1171,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
   RENDER.dash = function (el) {
     var f = dashFilter(), D = CT.dashboard(S.M, f), k = D.kpi;
     var AYS = CT.studentsByAy(S.M, D.ay || CT.ayOf(today(), S.M.ayStart), 3, D.prog);
+    var mb = S.cache.majorBasis || "active", MJ = CT.majorMix(S.M, mb, D.prog);
     var perTxt = (D.ay ? "Academic year " + ayText(D.ay) : "All academic years") + (D.month ? " · " + MONL[D.month - 1] : " · all months") + (D.prog ? " · " + D.prog : "");
     el.innerHTML =
       '<div class="head"><div><h2>' + L("dash") + '</h2><p>USD · ' + esc(perTxt) + " · updated " + fd(today()) + '</p></div><div class="bar">' +
@@ -1107,7 +1183,8 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
       kpiTile("totalStu", int(k.students), "On the student list · rejected/suspended " + int(k.rs)) +
       kpiTile("activeN", int(k.active), "Status “Active” on the Students tab" + (D.prog ? " · " + D.prog : ""), "ok") +
       kpiTile("gross", usd(k.gross), "Issued in period") +
-      kpiTile("disc", usd(k.disc), "Issued in period") +
+      kpiTile("scholOnly", usd(k.schol), "Scholarships, assistantships & credits · issued in period") +
+      kpiTile("discOnly", usd(k.discount), "Lines with “Discount” in the description · issued in period") +
       kpiTile("received", usd(k.received), "By date paid", "ok") +
       kpiTile("outstanding", usd(k.outstanding), int(k.overdueLines) + " overdue lines · " + usd(k.overdueAmt) + " overdue", k.overdueLines ? "crit" : "") +
       kpiTile("coll", pct(k.coll), "(Billed − balance) ÷ billed", k.coll >= 0.9 ? "ok" : k.coll >= 0.7 ? "warn" : "crit") + "</div>" +
@@ -1123,16 +1200,19 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
       '<div class="card"><h3>' + L("byAy") + ' <span class="small muted" style="font-weight:400">· last 3 academic years' + (D.prog ? " · " + esc(D.prog) : "") + '</span></h3><div class="grid g2" style="align-items:start"><div class="chart-box" style="height:260px"><canvas id="cAy"></canvas></div>' +
       '<div class="tbl-wrap"><table><thead><tr><th>' + L("ay") + "</th><th>" + L("intake") + '</th><th class="n">' + L("registered") + '</th><th class="n">' + L("enrolledN") + '</th><th class="n">' + L("rejShort") + '</th><th class="n">' + L("tuiBilled") + "</th></tr></thead><tbody>" +
       AYS.map(function (r) { return "<tr><td style=\"white-space:nowrap\">" + esc(r.label) + "</td><td style=\"white-space:nowrap\">" + esc(r.intake || "–") + '</td><td class="n">' + int(r.newStudents) + '</td><td class="n">' + int(r.enrolled) + '</td><td class="n">' + int(r.rejected) + '</td><td class="n"><b>' + int(r.active) + "</b></td></tr>"; }).join("") +
-      '</tbody></table><p class="small muted">Registered = students on the list under that intake (applicants included). Enrolled = paid the admin fee, not rejected / suspended. Tuition billed = students of any intake with tuition invoiced during that academic year (Sep–Aug). The Active students box above counts Status “Active” on the Students tab.</p></div></div></div>';
+      '</tbody></table><p class="small muted">Registered = students on the list under that intake (applicants included). Enrolled = paid the admin fee, not rejected / suspended. Tuition billed = students of any intake with tuition invoiced during that academic year (Sep–Aug). The Active students box above counts Status “Active” on the Students tab.</p></div></div></div>' +
+      majorCard(MJ, mb, D.prog);
     function upd() { S.cache.dashF = { ay: $("dfY").value, month: $("dfM").value, prog: $("dfP").value }; render(); }
     ["dfY", "dfM", "dfP"].forEach(function (id) { $(id).onchange = upd; });
-    D.ays = AYS;
+    $("dfMB").onchange = function () { S.cache.majorBasis = $("dfMB").value; render(); };
+    D.ays = AYS; D.mj = MJ; D.mb = mb;
     $("dPrint").onclick = function () { printDash(D, perTxt); };
     $("dXls").onclick = function () {
       exportXlsx("CamTech_Dashboard_" + today() + ".xlsx", [
-        ["Summary", [["CamTech Fee Tracker – Dashboard", perTxt], [], ["Item / ធាតុ", "Value"], [bi("totalStu"), k.students], [bi("activeN") + " (Status = Active)", k.active], [bi("gross"), k.gross], [bi("disc"), k.disc], [bi("received"), k.received], [bi("outstanding"), k.outstanding], ["Overdue lines", k.overdueLines], [bi("coll"), k.coll]]],
+        ["Summary", [["CamTech Fee Tracker – Dashboard", perTxt], [], ["Item / ធាតុ", "Value"], [bi("totalStu"), k.students], [bi("activeN") + " (Status = Active)", k.active], [bi("gross"), k.gross], [bi("scholOnly"), k.schol], [bi("discOnly"), k.discount], [bi("disc") + " (total)", k.disc], [bi("received"), k.received], [bi("outstanding"), k.outstanding], ["Overdue lines", k.overdueLines], [bi("coll"), k.coll]]],
         ["Monthly", [[bi("month"), bi("netBilled"), bi("collected"), bi("balance"), bi("collPct")]].concat(D.months.map(function (m) { return [m.key, m.billed, m.collected, m.bal, m.pct]; }))],
         ["Students by AY", [[bi("ay"), bi("intake"), bi("registered"), bi("enrolledN"), bi("rejSus"), bi("tuiBilled")]].concat(AYS.map(function (r) { return [r.label, r.intake, r.newStudents, r.enrolled, r.rejected, r.active]; }))],
+        ["Students by major", [["Count: " + MB_TXT[mb]], [bi("major"), "Students", "Share", "Y1", "Y2", "Y3", "Y4", "Year not set"]].concat(MJ.rows.map(function (r) { return [r.major, r.total, r.pct, r.Y1, r.Y2, r.Y3, r.Y4, r["Not set"]]; })).concat([["Total", MJ.total, 1]])],
         ["Categories", [[bi("category"), bi("lines"), bi("amount"), bi("share")]].concat(catOrder(D.cats).map(function (c) { return [c, D.cats[c].lines, D.cats[c].amt, k.gross ? D.cats[c].amt / k.gross : 0]; }))]
       ]);
     };
@@ -1151,8 +1231,92 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
           { label: "Tuition billed · បានចេញវិក្កយបត្រថ្លៃសិក្សា", data: AYS.map(function (r) { return r.active; }), backgroundColor: "#e3b44a" }] },
         options: { maintainAspectRatio: false, plugins: { legend: { position: "bottom" } }, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } } });
     };
-    if (window.Chart) { go(); goAy(); } else window.addEventListener("load", function () { go(); goAy(); }, { once: true });
+    var goMj = function () { majorCharts(MJ); };
+    if (window.Chart) { go(); goAy(); goMj(); } else window.addEventListener("load", function () { go(); goAy(); goMj(); }, { once: true });
   };
+
+  var MB_TXT = { active: "Status Active", enrolled: "Enrolled (admin fee paid, not rejected)", all: "Everyone on the list" };
+  var PAL = ["#003665", "#e3b44a", "#2f7ebc", "#c0504d", "#4c9a6a", "#8064a2", "#f08a24", "#5aa7a8", "#9fb8d6", "#b07aa1", "#7f7f7f", "#bcbd22", "#17becf", "#d62728"];
+  var YR_COL = { Y1: "#9fb8d6", Y2: "#2f7ebc", Y3: "#003665", Y4: "#e3b44a", "Not set": "#c9c9c9" };
+  function majorTable(MJ, forPrint) {
+    var H = forPrint ? PL : L;
+    return '<table><thead><tr><th>' + H("major") + '</th><th class="n">Y1</th><th class="n">Y2</th><th class="n">Y3</th><th class="n">Y4</th><th class="n">Not set</th><th class="n">' + H("total") + '</th><th class="n">' + H("share") + "</th></tr></thead><tbody>" +
+      MJ.rows.map(function (r) { return "<tr><td>" + esc(r.major) + "</td>" + ["Y1", "Y2", "Y3", "Y4", "Not set"].map(function (y) { return '<td class="n">' + (r[y] ? int(r[y]) : "–") + "</td>"; }).join("") + '<td class="n"><b>' + int(r.total) + '</b></td><td class="n">' + pct(r.pct) + "</td></tr>"; }).join("") +
+      '<tr class="tot"><td>' + H("total") + "</td>" + ["Y1", "Y2", "Y3", "Y4", "Not set"].map(function (y) { return '<td class="n">' + int(MJ.rows.reduce(function (a, r) { return a + r[y]; }, 0)) + "</td>"; }).join("") + '<td class="n">' + int(MJ.total) + '</td><td class="n">100%</td></tr></tbody></table>';
+  }
+  function majorCard(MJ, mb, prog) {
+    return '<div class="card"><div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap"><h3 style="margin:0">' + L("byMajor") + ' <span class="small muted" style="font-weight:400">· ' + int(MJ.total) + " students" + (prog ? " · " + esc(prog) : "") + "</span></h3>" +
+      '<label class="f">' + L("basis") + '<select id="dfMB">' + opts([["active", "Status Active"], ["enrolled", "Enrolled (admin fee paid)"], ["all", "Everyone on the list"]], mb) + "</select></label></div>" +
+      (MJ.total ? '<div class="grid g2" style="align-items:start;margin-top:8px"><div class="chart-box" style="height:380px"><canvas id="cMj"></canvas></div>' +
+        '<div><div class="small muted" style="margin-bottom:4px">' + L("byMajorYr") + ' · stacked by college year</div><div class="chart-box" style="height:' + Math.max(300, 70 + MJ.rows.length * 34) + 'px"><canvas id="cMjY"></canvas></div></div></div>' +
+        '<div class="tbl-wrap" style="margin-top:10px">' + majorTable(MJ) + '</div><p class="small muted">College year comes from “Current year” on the Students tab (Y1–Y4). “Not set” = the field is empty — fill it in on the student record to place them.</p>'
+        : '<div class="empty">No students for this selection.</div>') + "</div>";
+  }
+  function shortName(s, n) { s = String(s); return s.length > n ? s.slice(0, n - 1) + "…" : s; }
+  function wrapLabel(s, n) { var w = String(s).split(" "), out = [], cur = ""; w.forEach(function (x) { if ((cur + " " + x).trim().length > n && cur) { out.push(cur); cur = x; } else cur = (cur + " " + x).trim(); }); if (cur) out.push(cur); return out; }
+  /** Pie labels outside the slices, with leader lines, kept apart vertically on each side. */
+  var calloutPlugin = {
+    id: "callouts",
+    afterDatasetsDraw: function (ch) {
+      var meta = ch.getDatasetMeta(0), ds = ch.data.datasets[0], tot = ds.data.reduce(function (a, b) { return a + b; }, 0), ctx = ch.ctx;
+      if (!meta || !meta.data.length || !tot) return;
+      var items = [];
+      meta.data.forEach(function (a, i) {
+        if (!ds.data[i]) return;
+        var p = a.getProps(["x", "y", "startAngle", "endAngle", "outerRadius"], true), m = (p.startAngle + p.endAngle) / 2, c = Math.cos(m), sn = Math.sin(m);
+        items.push({ i: i, right: c >= 0, x0: p.x + c * p.outerRadius, y0: p.y + sn * p.outerRadius, x1: p.x + c * (p.outerRadius + 12), y1: p.y + sn * (p.outerRadius + 12), cx: p.x, r: p.outerRadius });
+      });
+      var area = ch.chartArea, GAP = 26;
+      [true, false].forEach(function (side) {
+        var it = items.filter(function (o) { return o.right === side; }).sort(function (a, b) { return a.y1 - b.y1; });
+        it.forEach(function (o, k) { o.y = k ? Math.max(o.y1, it[k - 1].y + GAP) : Math.max(o.y1, area.top + 10); });
+        for (var k = it.length - 1; k >= 0; k--) { var lim = k === it.length - 1 ? area.bottom - 14 : it[k + 1].y - GAP; if (it[k].y > lim) it[k].y = lim; }
+      });
+      ctx.save();
+      items.forEach(function (o) {
+        var lx = o.right ? o.cx + o.r + 26 : o.cx - o.r - 26, v = ds.data[o.i];
+        ctx.strokeStyle = "#8a96a8"; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(o.x0, o.y0); ctx.lineTo(o.x1, o.y1); ctx.lineTo(lx, o.y); ctx.stroke();
+        ctx.textAlign = o.right ? "left" : "right"; ctx.textBaseline = "middle";
+        var tx = lx + (o.right ? 4 : -4);
+        ctx.fillStyle = "#1f2937"; ctx.font = "600 11px " + Chart.defaults.font.family; ctx.fillText(shortName(ch.data.labels[o.i], 24), tx, o.y - 6);
+        ctx.fillStyle = "#5b6576"; ctx.font = "11px " + Chart.defaults.font.family; ctx.fillText(int(v) + " · " + (v / tot * 100).toFixed(1) + "%", tx, o.y + 7);
+      });
+      ctx.restore();
+    }
+  };
+  /** Value inside each stacked segment (when it fits) and the total at the end of each bar. */
+  var barLabelPlugin = {
+    id: "barLabels",
+    afterDatasetsDraw: function (ch) {
+      var ctx = ch.ctx, n = ch.data.labels.length, tot = []; for (var i = 0; i < n; i++) tot.push({ v: 0, x: 0, y: 0 });
+      ctx.save(); ctx.font = "10.5px " + Chart.defaults.font.family; ctx.textBaseline = "middle"; ctx.textAlign = "center";
+      ch.data.datasets.forEach(function (ds, di) {
+        var meta = ch.getDatasetMeta(di); if (meta.hidden) return;
+        meta.data.forEach(function (b, i) {
+          var v = ds.data[i]; if (!v) return;
+          tot[i].v += v; tot[i].x = Math.max(tot[i].x, b.x); tot[i].y = b.y;
+          var w = Math.abs(b.x - b.base);
+          if (w >= String(v).length * 6 + 6) { ctx.fillStyle = ds.backgroundColor === "#2f7ebc" || ds.backgroundColor === "#003665" ? "#fff" : "#1f2937"; ctx.fillText(v, (b.x + b.base) / 2, b.y); }
+        });
+      });
+      ctx.textAlign = "left"; ctx.fillStyle = "#1f2937"; ctx.font = "600 11px " + Chart.defaults.font.family;
+      tot.forEach(function (t) { if (t.v) ctx.fillText(t.v, t.x + 5, t.y); });
+      ctx.restore();
+    }
+  };
+  function majorCharts(MJ) {
+    if (!MJ.total || !$("cMj")) return;
+    chart("cMj", { type: "pie", plugins: [calloutPlugin],
+      data: { labels: MJ.rows.map(function (r) { return r.major; }), datasets: [{ data: MJ.rows.map(function (r) { return r.total; }), backgroundColor: MJ.rows.map(function (r, i) { return PAL[i % PAL.length]; }), borderColor: "#fff", borderWidth: 1.5 }] },
+      options: { maintainAspectRatio: false, layout: { padding: { left: 178, right: 178, top: 26, bottom: 26 } },
+        plugins: { legend: { display: false }, tooltip: { callbacks: { label: function (c) { return c.label + ": " + int(c.raw) + " (" + (c.raw / MJ.total * 100).toFixed(1) + "%)"; } } } } } });
+    var yrs = ["Y1", "Y2", "Y3", "Y4"].concat(MJ.rows.some(function (r) { return r["Not set"]; }) ? ["Not set"] : []);
+    chart("cMjY", { type: "bar", plugins: [barLabelPlugin],
+      data: { labels: MJ.rows.map(function (r) { return wrapLabel(r.major, 24); }),
+        datasets: yrs.map(function (y) { return { label: y === "Not set" ? "Year not set" : "Year " + y.slice(1), data: MJ.rows.map(function (r) { return r[y]; }), backgroundColor: YR_COL[y], barPercentage: 0.8, categoryPercentage: 0.85 }; }) },
+      options: { indexAxis: "y", maintainAspectRatio: false, plugins: { legend: { position: "bottom" }, tooltip: { callbacks: { title: function (c) { return MJ.rows[c[0].dataIndex].major; } } } }, layout: { padding: { right: 26 } },
+        scales: { x: { stacked: true, beginAtZero: true, ticks: { precision: 0 } }, y: { stacked: true, ticks: { autoSkip: false, font: { size: 10.5 } } } } } });
+  }
   function kpiTile(k, v, s, cls) { return '<div class="kpi ' + (cls || "") + '"><div class="l">' + esc(en(k)) + '<span class="kh">' + esc(kh(k)) + '</span></div><div class="v">' + v + '</div><div class="s">' + esc(s || "") + "</div></div>"; }
   function totRow(ms) {
     var b = 0, c = 0; ms.forEach(function (m) { b += m.billed; c += m.collected; });
@@ -1161,16 +1325,17 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
   function printDash(D, perTxt) {
     var k = D.kpi;
     var h = '<div class="doc">' + docHead("dash", esc(perTxt) + " · USD") +
-      '<div class="kv">' + [["totalStu", int(k.students)], ["activeN", int(k.active)], ["gross", usd(k.gross)], ["disc", usd(k.disc)], ["received", usd(k.received)], ["outstanding", usd(k.outstanding)], ["coll", pct(k.coll)], ["overdue", int(k.overdueLines) + " lines · " + usd(k.overdueAmt)]]
+      '<div class="kv">' + [["totalStu", int(k.students)], ["activeN", int(k.active)], ["gross", usd(k.gross)], ["scholOnly", usd(k.schol)], ["discOnly", usd(k.discount)], ["received", usd(k.received)], ["outstanding", usd(k.outstanding)], ["coll", pct(k.coll)], ["overdue", int(k.overdueLines) + " lines · " + usd(k.overdueAmt)]]
         .map(function (x) { return "<div>" + PL(x[0]) + "<b>" + x[1] + "</b></div>"; }).join("") + "</div>" +
       "<h4>" + esc(kh("monthly")) + " / " + esc(en("monthly")) + "</h4><table><thead><tr><th>" + PL("month") + '</th><th class="n">' + PL("netBilled") + '</th><th class="n">' + PL("collected") + '</th><th class="n">' + PL("balance") + '</th><th class="n">' + PL("collPct") + "</th></tr></thead><tbody>" +
       D.months.map(function (m) { return "<tr><td>" + MONK[+m.key.slice(5) - 1] + " / " + MON[+m.key.slice(5) - 1] + " " + m.key.slice(0, 4) + '</td><td class="n">' + usd(m.billed) + '</td><td class="n">' + usd(m.collected) + '</td><td class="n">' + usd(m.bal) + '</td><td class="n">' + (m.billed ? pct(m.pct) : "–") + "</td></tr>"; }).join("") + totRow(D.months) + "</tbody></table>" +
       "<h4>" + esc(kh("byAy")) + " / " + esc(en("byAy")) + "</h4><table><thead><tr><th>" + PL("ay") + "</th><th>" + PL("intake") + '</th><th class="n">' + PL("registered") + '</th><th class="n">' + PL("enrolledN") + '</th><th class="n">' + PL("rejSus") + '</th><th class="n">' + PL("tuiBilled") + "</th></tr></thead><tbody>" +
       D.ays.map(function (r) { return "<tr><td>" + esc(r.label) + "</td><td>" + esc(r.intake || "–") + '</td><td class="n">' + int(r.newStudents) + '</td><td class="n">' + int(r.enrolled) + '</td><td class="n">' + int(r.rejected) + '</td><td class="n">' + int(r.active) + "</td></tr>"; }).join("") + "</tbody></table>" +
+      "<h4>" + esc(kh("byMajorYr")) + " / " + esc(en("byMajorYr")) + " · " + esc(MB_TXT[D.mb]) + "</h4>" + majorTable(D.mj, true) +
       "<h4>" + esc(kh("byCat")) + " / " + esc(en("byCat")) + "</h4><table><thead><tr><th>" + PL("category") + '</th><th class="n">' + PL("lines") + '</th><th class="n">' + PL("amount") + '</th><th class="n">' + PL("share") + "</th></tr></thead><tbody>" +
       catOrder(D.cats).map(function (c) { return "<tr><td>" + esc(c) + '</td><td class="n">' + int(D.cats[c].lines) + '</td><td class="n">' + usd(D.cats[c].amt) + '</td><td class="n">' + (k.gross ? pct(D.cats[c].amt / k.gross) : "–") + "</td></tr>"; }).join("") + "</tbody></table>" +
       '<div class="sign three"><div>' + PL("prepared") + "</div><div>" + PL("checkedBy") + "</div><div>" + PL("approved") + "</div></div>" + docFoot("Dashboard") + "</div>";
-    printHtml(h);
+    printHtml(h, false, "A4", "CamTech Dashboard " + today());
   }
 
   /* =====================================================================================
@@ -1236,6 +1401,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
       "</tbody></table></div>" +
       '<div class="mf">' + (isAdmin() && raw ? '<button class="btn danger" id="pVoid">' + (raw.status === "Void" ? "Restore student" : "Void student") + "</button>" : "") +
       '<button class="btn" id="pPrint"><i class="ti ti-printer"></i> Statement</button>' +
+      (lvl("email") >= 2 && s.bal > 0.005 ? '<button class="btn" id="pMail"><i class="ti ti-mail"></i> Email reminder</button>' : "") +
       (canEdit && raw ? '<button class="btn" id="pEdit"><i class="ti ti-edit"></i> Edit</button>' : "") +
       (canInv ? '<button class="btn" id="pInv"><i class="ti ti-file-plus"></i> New invoice</button>' : "") +
       (canPay ? '<button class="btn primary" id="pPay"><i class="ti ti-cash"></i> Record payment</button>' : "") + "</div>");
@@ -1244,6 +1410,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
     if ($("pInv")) $("pInv").onclick = function () { invoiceForm(null, reg); };
     if ($("pPay")) $("pPay").onclick = function () { paymentForm(reg); };
     $("pPrint").onclick = function () { printStatement(s, lines); };
+    if ($("pMail")) $("pMail").onclick = function () { emailStudent(reg); };
     if ($("pVoid")) $("pVoid").onclick = function () { voidDialog("students", reg, raw.status === "Void", "student " + s.name); };
   }
 
@@ -1257,7 +1424,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
       lines.slice().reverse().map(function (l) { return "<tr><td>" + fd(l.issue) + "</td><td>" + esc(l.inv) + "</td><td>" + esc(l.fee) + (l.sched ? " · " + esc(l.sched) : "") + '</td><td class="n">' + usd(l.total) + '</td><td class="n">' + usd(l.paidN, true) + "</td><td>" + esc(l.rcp) + (l.paidDate ? " " + fd(l.paidDate) : "") + '</td><td class="n">' + usd(l.bal) + "</td><td>" + esc(stLabel(l.st)) + "</td></tr>"; }).join("") +
       '<tr class="tot"><td colspan="3">' + esc(kh("total")) + " / " + esc(en("total")) + ' (USD)</td><td class="n">' + usd(tot.t) + '</td><td class="n">' + usd(tot.p) + '</td><td></td><td class="n">' + usd(tot.b) + "</td><td></td></tr></tbody></table>" +
       '<div class="sign"><div>' + PL("prepared") + "</div><div>" + PL("checkedBy") + "</div></div>" + docFoot("Statement · " + s.reg) + "</div>";
-    printHtml(h);
+    printHtml(h, false, "A4", "Statement " + s.reg + " - " + (s.name || "") + " " + today());
   }
 
   function studentForm(rec) {
@@ -1392,10 +1559,12 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
       (g.lines[0].notes ? '<p class="small muted">' + esc(g.lines[0].notes) + "</p>" : "") +
       '<div class="mf">' + (isAdmin() ? '<button class="btn danger" id="ivVoid">Void invoice</button>' : "") +
       '<button class="btn" id="ivPrint"><i class="ti ti-printer"></i> Print invoice</button>' +
+      (lvl("email") >= 2 ? '<button class="btn" id="ivMail"><i class="ti ti-mail"></i> Email</button>' : "") +
       (canEdit ? '<button class="btn" id="ivEdit"><i class="ti ti-edit"></i> Edit</button>' : (lvl("invoices") >= 2 && hasPay ? '<span class="small muted" style="align-self:center">Has a payment: only an Admin can edit.</span>' : "")) +
       (canPay ? '<button class="btn primary" id="ivPay"><i class="ti ti-cash"></i> Record payment</button>' : "") + "</div>");
     if ($("ivStu")) $("ivStu").onclick = function (ev) { ev.preventDefault(); studentProfile(g.reg); };
     $("ivPrint").onclick = function () { printInvoice(g); };
+    if ($("ivMail")) $("ivMail").onclick = function () { emailInvoice(g); };
     if ($("ivEdit")) $("ivEdit").onclick = function () { invoiceForm(inv, g.reg); };
     if ($("ivPay")) $("ivPay").onclick = function () { paymentForm(g.reg, inv); };
     if ($("ivVoid")) $("ivVoid").onclick = function () { voidDialog("invoice", inv, false, "invoice " + inv + " (all " + g.lines.length + " lines)"); };
@@ -1530,7 +1699,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
       '<tr><td class="tl">អត្រាប្តូរប្រាក់ Exchange Rate $1=</td><td class="m b"><span>KHR</span><span>' + khr(rate) + "</span></td></tr></table>" +
       payOptsHtml() +
       '<div class="s-sign"><div>Customer’s signature and name</div><div>Seller’s signature and name</div></div></div>';
-    printHtml(h);
+    printHtml(h, false, "A4", "Invoice " + g.inv + " - " + (g.name || g.reg || ""));
   }
   function fdLong(ymd) { if (!ymd) return "—"; var d = new Date(ymd + "T00:00:00"); return MONL[d.getMonth()] + " " + d.getDate() + ", " + d.getFullYear(); }
 
@@ -1574,8 +1743,9 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
       '<dl class="dl"><dt>' + L("stuName") + "</dt><dd>" + esc(r.name) + " · " + esc(r.reg) + "</dd><dt>" + L("datePaid") + "</dt><dd>" + fd(r.date) + "</dd><dt>" + L("method") + "</dt><dd>" + esc(r.method || "–") + "</dd><dt>Recorded by</dt><dd>" + esc(r.lines[0].updatedBy) + "</dd></dl>" +
       '<table style="margin-top:10px"><thead><tr><th>' + L("invNo") + "</th><th>" + L("desc") + '</th><th class="n">' + L("paid") + "</th>" + (isAdmin() ? "<th></th>" : "") + "</tr></thead><tbody>" +
       r.lines.map(function (l) { return '<tr><td><a href="#" data-inv="' + esc(l.inv) + '">' + esc(l.inv) + "-" + esc(l.line) + "</a></td><td>" + esc(l.fee) + '</td><td class="n">' + usd(l.paidN) + "</td>" + (isAdmin() ? '<td><button class="btn small" data-clr="' + esc(l.id) + '">Clear payment</button></td>' : "") + "</tr>"; }).join("") +
-      '<tr class="tot"><td colspan="2">' + L("totalUSD") + '</td><td class="n">' + usd(r.paid) + "</td>" + (isAdmin() ? "<td></td>" : "") + '</tr></tbody></table><div class="mf"><button class="btn primary" id="rvPrint"><i class="ti ti-printer"></i> Print receipt</button></div>');
+      '<tr class="tot"><td colspan="2">' + L("totalUSD") + '</td><td class="n">' + usd(r.paid) + "</td>" + (isAdmin() ? "<td></td>" : "") + '</tr></tbody></table><div class="mf">' + (lvl("email") >= 2 ? '<button class="btn" id="rvMail"><i class="ti ti-mail"></i> Email receipt</button>' : "") + '<button class="btn primary" id="rvPrint"><i class="ti ti-printer"></i> Print receipt</button></div>');
     $("rvPrint").onclick = function () { printReceipt(r); };
+    if ($("rvMail")) $("rvMail").onclick = function () { emailReceipt(r); };
     document.querySelectorAll("#modalBg [data-inv]").forEach(function (a) { a.onclick = function (ev) { ev.preventDefault(); invoiceView(a.getAttribute("data-inv")); }; });
     document.querySelectorAll("#modalBg [data-clr]").forEach(function (b) { b.onclick = function () { clearPaymentDialog(b.getAttribute("data-clr")); }; });
   }
@@ -1596,7 +1766,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
       '<tr><td class="tl">សរុប/ Total KHR</td><td class="m b"><span>KHR</span><span>' + khr(r.paid * rate) + "</span></td></tr>" +
       '<tr><td class="tl">អត្រាប្តូរប្រាក់ Exchange Rate $1 =</td><td class="m b"><span>KHR</span><span>' + khr(rate) + "</span></td></tr></table>" +
       '<div class="s-sign"><div>Customer\'s name and signature</div><div>Seller\'s name and signature</div></div></div>';
-    printHtml(h, true, "A5");
+    printHtml(h, true, "A5", "Receipt " + r.rcp + " - " + (r.name || r.reg || ""));
   }
 
   /** Record a payment: pick a student (or open from an invoice), tick the lines, enter amounts. */
@@ -1679,7 +1849,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
     $("rPrint").onclick = function () {
       printHtml('<div class="doc land">' + docHead("rejects", fd(today())) + "<table><thead><tr><th>" + PL("no") + "</th><th>" + PL("reg") + "</th><th>" + PL("name") + "</th><th>" + PL("intake") + "</th><th>" + PL("gender") + "</th><th>" + PL("major") + "</th><th>" + PL("schol") + "</th><th>" + PL("status") + "</th><th>" + PL("date") + "</th><th>" + PL("hs") + "</th></tr></thead><tbody>" +
         list.map(function (r, i) { return "<tr><td>" + (i + 1) + "</td><td>" + esc(r.reg) + "</td><td>" + esc(r.name) + "</td><td>" + esc(r.intake) + "</td><td>" + esc(r.gender) + "</td><td>" + esc(r.major) + "</td><td>" + esc(schPct(r.schol)) + "</td><td>" + esc(stLabel(r.rsStatus)) + "</td><td>" + fd(r.dateUpdate) + "</td><td>" + esc(r.hs) + "</td></tr>"; }).join("") +
-        '</tbody></table><div class="sign three"><div>' + PL("prepared") + "</div><div>" + PL("checkedBy") + "</div><div>" + PL("approved") + "</div></div>" + docFoot("Reject / Suspend list") + "</div>", true);
+        '</tbody></table><div class="sign three"><div>' + PL("prepared") + "</div><div>" + PL("checkedBy") + "</div><div>" + PL("approved") + "</div></div>" + docFoot("Reject / Suspend list") + "</div>", true, "A4", "CamTech Reject-Suspend list " + today());
     };
   };
   function rejectForm(r) {
@@ -1740,8 +1910,8 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
       '<button class="btn" id="riP"><i class="ti ti-printer"></i> Print</button><button class="btn" id="riX"><i class="ti ti-file-spreadsheet"></i> Excel</button>' +
       '<span class="small muted">Count basis for “enrolled”: ' + esc(S.cfg.basis) + "</span></div>" +
       '<div class="kpis" style="margin-top:12px">' + kpiTile("enrolledBefore", int(I.head.before), "Admin fee paid") + kpiTile("rejSus", int(I.head.rejected), "From the reject / suspend list", I.head.rejected ? "warn" : "") +
-      kpiTile("finalEnr", int(I.head.final), "", "ok") + kpiTile("target", int(I.targetTotal), "All scholarship plans") + kpiTile("gap", int(gapTot), "Target − actual (plans)", gapTot > 0 ? "crit" : "ok") + "</div>" +
-      '<div class="card" style="margin-top:12px"><h3>1. Target vs actual by scholarship plan <span class="kh">គោលដៅ និងជាក់ស្តែងតាមប្រភេទអាហារូបករណ៍</span></h3><div class="tbl-wrap">' + sec1(I, cols, false) + '</div><p class="small muted">Reserved and Admin fee count first payments. 100% counts admin-fee payers with a 100% scholarship; the other plans count first tuition payments. Full pay = any other scholarship value.</p></div>' +
+      kpiTile("finalEnr", int(I.head.final), "", "ok") + kpiTile("target", int(I.targetTotal), I.targetTotal ? "All scholarship plans" : "Not set yet — use Set targets") + kpiTile("gap", int(gapTot), I.targetTotal ? int(I.targetTotal) + " target − " + int(I.actual.totalPlans) + " final enrolled" : "", gapTot > 0 ? "crit" : "ok") + "</div>" +
+      '<div class="card" style="margin-top:12px"><h3>1. Target vs actual by scholarship plan <span class="kh">គោលដៅ និងជាក់ស្តែងតាមប្រភេទអាហារូបករណ៍</span></h3><div class="tbl-wrap">' + sec1(I, cols, false) + '</div><p class="small muted">Reserved and Admin fee count first payments. The plan columns count the final enrolled students (admin fee paid, not rejected / suspended) by the scholarship on their student record, so they add up to Final enrolled; ' + int(I.actual.noTuition) + ' of them have not paid tuition yet. Full pay = no scholarship or any value not in the plan list. Targets are set per intake with Set targets (Lists permission needed).</p></div>' +
       '<div class="card" style="margin-top:12px"><h3>2. Final enrolled by major × scholarship plan <span class="kh">ចុះឈ្មោះចុងក្រោយតាមជំនាញ</span></h3><div class="tbl-wrap">' + sec2(I, pc, false) + "</div></div>" +
       '<div class="card" style="margin-top:12px"><h3>3. Enrolment profile · admin fee paid <span class="kh">ទម្រង់និស្សិតចុះឈ្មោះ</span></h3><div class="grid g2">' +
       profTable(I.gender, "gender", false) + '<div class="chart-box" style="height:230px"><canvas id="riCG"></canvas></div>' + profTable(I.schoolType, "schoolType", false) + '<div class="chart-box" style="height:230px"><canvas id="riCS"></canvas></div></div>' +
@@ -1754,7 +1924,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
         "<h4>1. គោលដៅ និងជាក់ស្តែងតាមប្រភេទអាហារូបករណ៍ / Target vs actual by scholarship plan</h4>" + sec1(I, cols, true) +
         "<h4>2. ចុះឈ្មោះចុងក្រោយតាមជំនាញ / Final enrolled by major × scholarship plan</h4>" + sec2(I, pc, true) +
         '<h4>3. ទម្រង់និស្សិតចុះឈ្មោះ / Enrolment profile (admin fee paid)</h4><div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">' + profTable(I.gender, "gender", true) + profTable(I.schoolType, "schoolType", true) + profTable(I.major, "major", true) + profTable(topN(I.school, 5), "hs", true, "Top 5") + "</div>" +
-        '<div class="sign three"><div>' + PL("prepared") + "</div><div>" + PL("checkedBy") + "</div><div>" + PL("approved") + "</div></div>" + docFoot("Intake report · " + sel) + "</div>", true);
+        '<div class="sign three"><div>' + PL("prepared") + "</div><div>" + PL("checkedBy") + "</div><div>" + PL("approved") + "</div></div>" + docFoot("Intake report · " + sel) + "</div>", true, "A4", "CamTech Intake report " + sel);
     };
     $("riX").onclick = function () {
       var s1 = [["Line"].concat(cols.map(function (c) { return c[1]; })).concat(["Total (plans)"])];
@@ -1831,7 +2001,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
       '<div class="tbl-wrap"><table><thead>' + head(false) + "</thead><tbody>" + body(shown) + "</tbody></table></div>" + (rows.length > shown.length ? '<p class="small muted">Showing ' + shown.length + " of " + rows.length + " rows. Excel has them all.</p>" : "") + "</div>";
     function upd() { S.cache.arF = { from: $("arF").value, to: $("arT").value, by: $("arB").value }; render(); }
     ["arF", "arT", "arB"].forEach(function (id) { $(id).onchange = upd; });
-    $("arP").onclick = function () { printHtml('<div class="doc land">' + docHead("arRep", esc(kh("period")) + " / " + esc(en("period")) + ": " + fd(f.from) + " – " + fd(f.to) + " · " + esc(byLabel) + " · USD") + "<table><thead>" + head(true) + "</thead><tbody>" + body(shown) + '</tbody></table><div class="sign three"><div>' + PL("prepared") + "</div><div>" + PL("checkedBy") + "</div><div>" + PL("approved") + "</div></div>" + docFoot("AR report") + "</div>", true); };
+    $("arP").onclick = function () { printHtml('<div class="doc land">' + docHead("arRep", esc(kh("period")) + " / " + esc(en("period")) + ": " + fd(f.from) + " – " + fd(f.to) + " · " + esc(byLabel) + " · USD") + "<table><thead>" + head(true) + "</thead><tbody>" + body(shown) + '</tbody></table><div class="sign three"><div>' + PL("prepared") + "</div><div>" + PL("checkedBy") + "</div><div>" + PL("approved") + "</div></div>" + docFoot("AR report") + "</div>", true, "A4", "CamTech AR report " + f.from + " to " + f.to); };
     $("arX").onclick = function () {
       var out = [[byLabel].concat(f.by === "student" ? [bi("name"), bi("intake")] : []).concat([bi("lines"), bi("invoiced"), bi("paid"), bi("paidNoAmt"), bi("arBal"), bi("collPct"), bi("pastDue")])];
       rows.forEach(function (r) { out.push([r.key].concat(f.by === "student" ? [r.name, r.intake] : []).concat([r.lines, r.inv, r.paid, r.paidNoAmt, r.arBal, r.coll, r.pastDue])); });
@@ -1909,7 +2079,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
         "<h4>" + esc(kh("aging")) + " / AR aging summary</h4>" + sumTable(true) +
         "<h4>តាមនិស្សិត / By student</h4>" + stuTable(A.students, true) +
         '<div class="doc land" style="font-size:9px;break-before:page"><h4>ព័ត៌មានលម្អិតវិក្កយបត្រ / Invoice details</h4>' + detTable(A.invoices, true) + "</div>" +
-        '<div class="sign three"><div>' + PL("prepared") + "</div><div>" + PL("checkedBy") + "</div><div>" + PL("approved") + "</div></div>" + docFoot("AR aging · " + A.asOf) + "</div>", true);
+        '<div class="sign three"><div>' + PL("prepared") + "</div><div>" + PL("checkedBy") + "</div><div>" + PL("approved") + "</div></div>" + docFoot("AR aging · " + A.asOf) + "</div>", true, "A4", "CamTech AR aging as of " + A.asOf);
     };
     var draw = function () {
       chart("cAg", { type: "bar", data: { labels: B.map(function (b) { return b.label; }), datasets: [{ label: "Open AR (USD)", data: B.map(function (b) { return Math.round(b.bal); }),
@@ -1940,7 +2110,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
     function setD(v) { S.cache.dayD = v; render(); }
     $("dyD").onchange = function () { setD($("dyD").value); };
     $("dyPrev").onclick = function () { setD(CT.addDays(d, -1)); }; $("dyNext").onclick = function () { setD(CT.addDays(d, 1)); };
-    $("dyP").onclick = function () { printHtml('<div class="doc land" style="font-size:9px">' + docHead("dailyRep", fd(d) + " · USD") + tbl(true) + '<div class="sign three"><div>' + PL("prepared") + "</div><div>" + PL("checkedBy") + "</div><div>" + PL("approved") + "</div></div>" + docFoot("Daily report " + d) + "</div>", true); };
+    $("dyP").onclick = function () { printHtml('<div class="doc land" style="font-size:9px">' + docHead("dailyRep", fd(d) + " · USD") + tbl(true) + '<div class="sign three"><div>' + PL("prepared") + "</div><div>" + PL("checkedBy") + "</div><div>" + PL("approved") + "</div></div>" + docFoot("Daily report " + d) + "</div>", true, "A4", "CamTech Daily report " + d); };
     $("dyX").onclick = function () { exportXlsx("CamTech_Daily_report_" + d + ".xlsx", [["Daily report", [cols.map(function (c) { return bi(c[0]); })].concat(R.rows.map(function (l, i) { return cols.map(function (c) { var v = c[1](l, i); return c[0] === "paid" ? l.paidN : c[0] === "unit" ? l.price : c[0] === "rateS" ? num(l.rate2 || l.rate) : v; }); }))]]); };
   }
 
@@ -2019,7 +2189,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
    * ADMIN: users · roles & permissions (matrix) · settings · backups · change history
    * ===================================================================================== */
   var AREAS = [["dash", "Dashboard · ផ្ទាំងសង្ខេប"], ["students", "Students · និស្សិត"], ["invoices", "Invoices · វិក្កយបត្រ"], ["payments", "Payments & receipts · ការបង់ប្រាក់"],
-    ["rejects", "Reject / suspend · បដិសេធ / ព្យួរ"], ["reports", "Reports · របាយការណ៍"], ["lists", "Lists: fee types, majors, schools, targets · បញ្ជី"]];
+    ["rejects", "Reject / suspend · បដិសេធ / ព្យួរ"], ["reports", "Reports · របាយការណ៍"], ["lists", "Lists: fee types, majors, schools, targets · បញ្ជី"], ["email", "Email alerts · ការជូនដំណឹងតាមអ៊ីមែល"]];
   var VIEW_ONLY = { dash: 1, reports: 1 };
   RENDER.admin = function (el) {
     if (!isAdmin()) { el.innerHTML = '<div class="card empty">Admins only.</div>'; return; }
@@ -2128,6 +2298,242 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
     }).catch(function (e) { $("lgT").textContent = errText(e); });
   }
 
+
+  /* =====================================================================================
+   * EMAIL ALERTS – reminders, overdue notices, invoices and receipts by email (Khmer + English)
+   * Sent through the Apps Script (MailApp, from the Google account that runs the script). Every send goes to Email_Log.
+   * ===================================================================================== */
+  var TPL = {
+    reminder: { en: "Payment reminder", kh: "ការរំលឹកការបង់ប្រាក់",
+      msgKh: "សូមជម្រាបថា វិក្កយបត្រខាងក្រោមនឹងដល់ថ្ងៃផុតកំណត់ក្នុងពេលឆាប់ៗនេះ។ សូមបង់ប្រាក់មុនថ្ងៃផុតកំណត់ តាមជម្រើសបង់ប្រាក់ខាងក្រោម។",
+      msgEn: "This is a friendly reminder that the invoice(s) below will be due soon. Please pay by the due date using one of the payment options below." },
+    overdue: { en: "Overdue payment notice", kh: "ការជូនដំណឹងអំពីការបង់ប្រាក់ហួសកាលកំណត់",
+      msgKh: "យោងតាមកំណត់ត្រារបស់យើង វិក្កយបត្រខាងក្រោមបានហួសថ្ងៃផុតកំណត់។ សូមទូទាត់សមតុល្យឱ្យបានឆាប់ ឬទាក់ទងការិយាល័យហិរញ្ញវត្ថុ ប្រសិនបើលោកអ្នកបានបង់រួចហើយ។",
+      msgEn: "Our records show that the invoice(s) below are past their due date. Please settle the balance as soon as possible, or contact the Finance Office if you have already paid." },
+    invoice: { en: "Invoice", kh: "វិក្កយបត្រ",
+      msgKh: "សូមពិនិត្យវិក្កយបត្ររបស់លោកអ្នកខាងក្រោម។ សូមបង់ប្រាក់មុនថ្ងៃផុតកំណត់ តាមជម្រើសបង់ប្រាក់ខាងក្រោម។",
+      msgEn: "Please find your invoice below. Kindly pay by the due date using one of the payment options below." },
+    receipt: { en: "Payment received", kh: "បង្កាន់ដៃទទួលប្រាក់",
+      msgKh: "សូមអរគុណ។ យើងបានទទួលការបង់ប្រាក់របស់លោកអ្នកដូចខាងក្រោម។",
+      msgEn: "Thank you. We have received your payment as shown below." }
+  };
+  function mailEsc(v) { return esc(v == null ? "" : v); }
+  var MS = 'font-family:Arial,Helvetica,"Khmer OS Siemreap","Noto Sans Khmer",sans-serif;';
+  /** Open invoices of one person (student Reg No, or Bill-to name for tenants) as of today. */
+  function openInvoicesOf(reg, name) {
+    return S.invList.filter(function (g) { return (reg ? g.reg === reg : !g.reg && g.name === name) && g.bal > 0.005 && g.st !== "Check price"; })
+      .sort(function (a, b) { return (a.due || "").localeCompare(b.due || ""); });
+  }
+  function daysLate(due) { if (!due) return 0; return Math.round((Date.parse(today() + "T00:00:00Z") - Date.parse(due + "T00:00:00Z")) / 864e5); }
+  /** The email body (inline styles only, so it looks the same in Gmail / Outlook). */
+  function mailHtml(o) {
+    var c = docCfg(), t = TPL[o.type], th = 'style="' + MS + 'background:#95B3D7;color:#000;padding:6px 8px;border:1px solid #7f9cc0;font-size:12px;text-align:left"',
+      td = 'style="' + MS + 'padding:6px 8px;border:1px solid #c9d3df;font-size:12.5px;vertical-align:top"', tdn = td.replace('vertical-align:top', 'vertical-align:top;text-align:right;white-space:nowrap');
+    var h = '<div style="' + MS + 'max-width:680px;margin:0 auto;color:#1f2937;font-size:13.5px;line-height:1.55">' +
+      '<div style="border-bottom:3px solid #003665;padding-bottom:8px;margin-bottom:14px"><div style="font-size:17px;font-weight:bold;color:#003665">' + mailEsc(c.orgKh) + '</div><div style="font-size:15px;font-weight:bold;color:#003665">' + mailEsc(c.legal) + "</div></div>" +
+      '<div style="font-size:16px;font-weight:bold;margin-bottom:10px">' + mailEsc(t.kh) + " / " + mailEsc(t.en) + "</div>" +
+      "<p>ជូនចំពោះ / Dear <b>" + mailEsc(o.name) + "</b>" + (o.reg ? " (" + mailEsc(o.reg) + ")" : "") + ",</p>" +
+      String(o.message || "").split(/\n\s*\n/).map(function (p) { return "<p>" + mailEsc(p).replace(/\n/g, "<br>") + "</p>"; }).join("");
+    if (o.type === "receipt") {
+      var r = o.rcp;
+      h += '<table cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;margin:10px 0"><tr><th ' + th + ">លេខបង្កាន់ដៃ / Receipt #</th><th " + th + ">កាលបរិច្ឆេទ / Date</th><th " + th + ">វិក្កយបត្រ / Invoice</th><th " + th + ">មធ្យោបាយ / Method</th></tr>" +
+        "<tr><td " + td + "><b>" + mailEsc(r.rcp) + "</b></td><td " + td + ">" + fd(r.date) + "</td><td " + td + ">" + mailEsc(Object.keys(r.invs).join(", ")) + "</td><td " + td + ">" + mailEsc(r.method || "–") + "</td></tr></table>" +
+        '<table cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;margin:6px 0 12px"><tr><th ' + th + ">ល.រ / Nº</th><th " + th + ">បរិយាយ / Description</th><th " + th.replace("text-align:left", "text-align:right") + ">បានបង់ / Paid (USD)</th></tr>" +
+        r.lines.map(function (l, i) { return "<tr><td " + td + ">" + (i + 1) + "</td><td " + td + ">" + mailEsc(l.fee) + "</td><td " + tdn + ">" + usd(l.paidN) + "</td></tr>"; }).join("") +
+        "<tr><td " + td + ' colspan="2"><b>សរុប / Total USD</b></td><td ' + tdn + "><b>" + usd(r.paid) + "</b></td></tr></table>";
+    } else {
+      var invs = o.invs, tot = 0;
+      h += '<table cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;margin:10px 0 12px"><tr><th ' + th + ">វិក្កយបត្រ / Invoice #</th><th " + th + ">ចេញថ្ងៃ / Issued</th><th " + th + ">ផុតកំណត់ / Due</th><th " + th + ">បរិយាយ / Description</th><th " + th.replace("text-align:left", "text-align:right") + ">ទឹកប្រាក់ / Amount</th><th " + th.replace("text-align:left", "text-align:right") + ">នៅសល់ / Balance (USD)</th></tr>" +
+        invs.map(function (g) {
+          tot += g.bal; var late = g.bal > 0.005 ? daysLate(g.due) : 0;
+          return "<tr><td " + td + "><b>" + mailEsc(g.inv) + "</b></td><td " + td + ">" + fd(g.issue) + "</td><td " + td + ">" + fd(g.due) + (late > 0 ? '<div style="color:#b91c1c;font-size:11.5px">' + late + " days overdue / ហួស " + late + " ថ្ងៃ</div>" : "") + "</td><td " + td + ">" +
+            g.lines.filter(function (l) { return l.total; }).map(function (l) { return mailEsc(l.fee) + (l.total < 0 ? "" : "") + ' <span style="color:#6b7280">(' + usd(l.total) + ")</span>"; }).join("<br>") + "</td><td " + tdn + ">" + usd(g.total) + "</td><td " + tdn + "><b>" + usd(g.bal) + "</b></td></tr>";
+        }).join("") +
+        "<tr><td " + td + ' colspan="5"><b>សរុបត្រូវបង់ / Total due (USD)</b></td><td ' + tdn + '><b style="color:#b91c1c">' + usd(tot) + "</b></td></tr></table>";
+      var po = c.payOpts || [];
+      if (po.length) h += '<div style="background:#f3f6fa;border:1px solid #d6dee8;padding:10px 12px;margin:8px 0 14px;font-size:12.5px"><b>ជម្រើសបង់ប្រាក់ / Payment options</b><br>' +
+        po.map(function (x) { return x === "---" ? '<div style="height:8px"></div>' : mailEsc(x) + "<br>"; }).join("") + "</div>";
+    }
+    h += "<p>សូមអរគុណ / Thank you,<br><b>" + mailEsc(S.cfg.mailSign || "Finance Office · ការិយាល័យហិរញ្ញវត្ថុ") + "</b><br>" + mailEsc(c.legal) + "</p>" +
+      '<div style="border-top:1px solid #d6dee8;margin-top:16px;padding-top:8px;color:#6b7280;font-size:11.5px">' + mailEsc(c.contact) + "<br>" + mailEsc(c.web) +
+      "<br>This is an automatic message from the CamTech Fee Tracker. If you have already paid, please ignore it or reply with your receipt.</div></div>";
+    return h;
+  }
+  function mailText(o) {
+    var t = TPL[o.type], lines = [t.kh + " / " + t.en, "", "Dear " + o.name + (o.reg ? " (" + o.reg + ")" : "") + ",", "", o.message, ""];
+    if (o.type === "receipt") { lines.push("Receipt " + o.rcp.rcp + " · " + o.rcp.date + " · USD " + usd(o.rcp.paid)); }
+    else { var tot = 0; o.invs.forEach(function (g) { tot += g.bal; lines.push("Invoice " + g.inv + " · due " + (g.due || "–") + " · balance USD " + usd(g.bal)); }); lines.push("Total due: USD " + usd(tot)); }
+    lines.push("", "Thank you,", S.cfg.mailSign || "Finance Office", docCfg().legal);
+    return lines.join("\n");
+  }
+  function mailSubject(o) {
+    var t = TPL[o.type], org = "CamTech University";
+    if (o.type === "receipt") return t.en + " – Receipt " + o.rcp.rcp + " | " + t.kh;
+    if (o.type === "invoice") return t.en + " " + o.invs.map(function (g) { return g.inv; }).join(", ") + " from " + org + " | " + t.kh;
+    var tot = o.invs.reduce(function (a, g) { return a + g.bal; }, 0);
+    return t.en + " – USD " + usd(tot) + (o.type === "overdue" ? " outstanding" : " due soon") + " | " + t.kh + " · " + org;
+  }
+  function defaultMsg(type) { var t = TPL[type]; return t.msgKh + "\n\n" + t.msgEn; }
+  function emailOf(reg) { var s = reg && S.M.stuMap[reg]; return s ? String(s.email || "").trim() : ""; }
+  function ccDefault() { return S.cfg.mailCc || ""; }
+
+  /** Compose one email. o = { type, reg, name, invs?, rcp? } */
+  function emailCompose(o) {
+    if (lvl("email") < 2) { notice("Your role can't send emails. Ask an Admin.", "bad"); return; }
+    o.message = o.message || defaultMsg(o.type);
+    var to = emailOf(o.reg), stu = o.reg && S.M.stuMap[o.reg];
+    var types = o.rcp ? [["receipt", "Receipt · បង្កាន់ដៃ"]] : [["invoice", "Invoice · វិក្កយបត្រ"], ["reminder", "Payment reminder · រំលឹក"], ["overdue", "Overdue notice · ហួសកំណត់"]];
+    modal('<div class="mh"><h3><i class="ti ti-mail"></i> Email · ផ្ញើអ៊ីមែល — ' + esc(o.name) + '</h3><button class="btn small" data-close>✕</button></div>' +
+      '<div class="form"><label class="f wide">To · ទៅកាន់<input id="emTo" type="email" multiple value="' + esc(to) + '" placeholder="student@example.com"></label>' +
+      (o.reg && stu && lvl("students") >= 2 ? '<label class="small wide" style="display:flex;gap:6px;align-items:center;margin-top:-4px"><input type="checkbox" id="emSave" style="min-height:0"' + (to ? "" : " checked") + "> Save this address on the student record" + (to ? " (replaces " + esc(to) + ")" : "") + "</label>" : "") +
+      '<label class="f wide">CC<input id="emCc" value="' + esc(ccDefault()) + '" placeholder="optional"></label>' +
+      '<label class="f">Type · ប្រភេទ<select id="emTy">' + opts(types, o.type) + "</select></label>" +
+      '<label class="f wide">Subject · ប្រធានបទ<input id="emSu"></label>' +
+      '<label class="f wide">Message · សារ (Khmer and English)<textarea id="emMs" rows="5"></textarea></label></div>' +
+      '<div class="small muted" style="margin:6px 0 4px">Preview · មើលជាមុន</div><iframe id="emPv" style="width:100%;height:330px;border:1px solid var(--line);border-radius:8px;background:#fff"></iframe>' +
+      '<div class="err" id="emE"></div><div class="mf"><span class="small muted" id="emQ" style="align-self:center;margin-right:auto"></span><button class="btn" data-close>Cancel</button><button class="btn primary" id="emSend"><i class="ti ti-send"></i> Send</button></div>', "wide");
+    function sync(resetText) {
+      o.type = $("emTy").value;
+      if (resetText) { o.message = defaultMsg(o.type); $("emMs").value = o.message; $("emSu").value = mailSubject(o); }
+      o.message = $("emMs").value;
+      var d = $("emPv").contentDocument; d.open(); d.write('<!doctype html><meta charset="utf-8"><body style="margin:12px">' + mailHtml(o) + "</body>"); d.close();
+    }
+    $("emMs").value = o.message; $("emSu").value = mailSubject(o); sync(false);
+    $("emTy").onchange = function () { sync(true); };
+    $("emMs").oninput = debounce(function () { sync(false); }, 300);
+    $("emSend").onclick = function () {
+      var addr = $("emTo").value.trim();
+      if (!addr) { $("emE").textContent = "Enter the email address."; return; }
+      $("emE").textContent = ""; $("emSend").disabled = true; $("emSend").textContent = "Sending…";
+      o.message = $("emMs").value;
+      var save = $("emSave") && $("emSave").checked && addr !== to ? saveStudentEmail(o.reg, addr) : Promise.resolve();
+      save.then(function () {
+        return api({ action: "sendEmail", to: addr, cc: $("emCc").value, subject: $("emSu").value, html: mailHtml(o), text: mailText(o), type: TPL[o.type].en, reg: o.reg || "", ref: o.rcp ? o.rcp.rcp : o.invs.map(function (g) { return g.inv; }).join(", ") });
+      }).then(function (j) {
+        closeModal(); notice("Email sent to " + esc(addr) + (j.quota != null ? " · " + j.quota + " emails left today" : "") + ".", "good");
+      }).catch(function (e) { $("emE").textContent = errText(e); $("emSend").disabled = false; $("emSend").innerHTML = '<i class="ti ti-send"></i> Send'; });
+    };
+  }
+  function saveStudentEmail(reg, addr) {
+    var raw = S.students.filter(function (x) { return x.reg === reg; })[0]; if (!raw) return Promise.resolve();
+    var rec = Object.assign({}, raw, { email: addr });
+    return api({ action: "saveStudent", record: rec, existing: true }).then(function (j) { apply(j); });
+  }
+  function emailInvoice(g) {
+    var late = g.due && g.due < today() && g.bal > 0.005;
+    emailCompose({ type: g.bal <= 0.005 ? "invoice" : late ? "overdue" : "invoice", reg: g.reg, name: g.name, invs: [g] });
+  }
+  function emailReceipt(r) { emailCompose({ type: "receipt", reg: r.reg, name: r.name, rcp: r }); }
+  function emailStudent(reg) {
+    var s = S.M.stuMap[reg], invs = openInvoicesOf(reg);
+    if (!invs.length) { notice("No open balance for " + esc(s ? s.name : reg) + ".", "info"); return; }
+    emailCompose({ type: invs.some(function (g) { return g.due && g.due < today(); }) ? "overdue" : "reminder", reg: reg, name: s ? s.name : reg, invs: invs });
+  }
+
+  /* ---------------- the Email alerts page ---------------- */
+  RENDER.alerts = function (el) {
+    var sub = S.sub.alerts || "send";
+    el.innerHTML = '<div class="head"><div><h2>' + L("alerts") + '</h2><p>Payment reminders and overdue notices by email, in Khmer and English.</p></div></div><div class="sub" id="alSub">' +
+      [["send", "Send reminders · ផ្ញើការរំលឹក"], ["log", "Sent emails · អ៊ីមែលដែលបានផ្ញើ"]].map(function (x) { return '<button data-sub="' + x[0] + '" class="' + (sub === x[0] ? "on" : "") + '">' + esc(x[1]) + "</button>"; }).join("") + '</div><div id="alBody"></div>';
+    $("alSub").onclick = function (ev) { var b = ev.target.closest("[data-sub]"); if (b) { S.sub.alerts = b.getAttribute("data-sub"); render(); } };
+    if (sub === "log") alLog($("alBody")); else alSend($("alBody"));
+  };
+  function alRows(f) {
+    var t = today(), soon = CT.addDays(t, num(f.days) || 7), q = f.q.trim().toLowerCase(), by = {};
+    S.invList.forEach(function (g) {
+      if (g.bal <= 0.005 || g.st === "Check price" || g.st === "Rejected" || g.st === "Suspended" || g.st === "Transferred") return;
+      var over = g.due && g.due < t;
+      if (f.kind === "overdue" && !over) return;
+      if (f.kind === "soon" && (over || !g.due || g.due > soon)) return;
+      var k = g.reg || "name:" + g.name;
+      var r = by[k] || (by[k] = { key: k, reg: g.reg, name: g.name, invs: [], bal: 0, maxLate: 0, email: emailOf(g.reg) });
+      r.invs.push(g); r.bal += g.bal; r.maxLate = Math.max(r.maxLate, daysLate(g.due));
+    });
+    return Object.keys(by).map(function (k) { return by[k]; }).filter(function (r) {
+      if (f.withEmail && !r.email) return false;
+      if (q && (r.reg + " " + r.name + " " + r.email).toLowerCase().indexOf(q) < 0) return false;
+      if (f.minDays && r.maxLate < num(f.minDays)) return false;
+      return true;
+    }).sort(function (a, b) { return b.maxLate - a.maxLate || b.bal - a.bal; });
+  }
+  function alSend(el) {
+    var f = S.cache.alF || (S.cache.alF = { kind: "overdue", days: 7, minDays: "", q: "", withEmail: false });
+    var rows = alRows(f), canSend = lvl("email") >= 2, sel = S.cache.alSel || (S.cache.alSel = {});
+    var withMail = rows.filter(function (r) { return r.email; }).length, pg = pager("al", rows.length, 50);
+    el.innerHTML = '<div class="card tight bar" style="margin-top:10px">' +
+      '<label class="f">Show · បង្ហាញ<select id="alK">' + opts([["overdue", "Overdue · ហួសកំណត់"], ["soon", "Due soon · ជិតដល់ថ្ងៃកំណត់"], ["all", "All open balances · សមតុល្យទាំងអស់"]], f.kind) + "</select></label>" +
+      (f.kind === "soon" ? '<label class="f">Due within (days)<input id="alD" type="number" min="1" value="' + esc(f.days) + '" style="width:90px"></label>' : "") +
+      (f.kind === "overdue" ? '<label class="f">At least (days late)<input id="alM" type="number" min="0" value="' + esc(f.minDays) + '" style="width:90px" placeholder="any"></label>' : "") +
+      '<label class="f" style="flex:1;min-width:200px">Search · ស្វែងរក<input id="alQ" value="' + esc(f.q) + '" placeholder="Reg No, name or email"></label>' +
+      '<label class="small" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="alW" style="min-height:0"' + (f.withEmail ? " checked" : "") + "> Only with an email address</label></div>" +
+      '<div class="card tight" style="margin-top:10px"><div class="bar" style="justify-content:space-between"><div class="small muted">' + int(rows.length) + " people · " + int(withMail) + " with an email address · USD " + usd(rows.reduce(function (a, r) { return a + r.bal; }, 0)) + " open" + "</div>" +
+      (canSend ? '<button class="btn primary" id="alGo"><i class="ti ti-send"></i><span>Send to selected (<b id="alN">0</b>)</span></button>' : "") + "</div>" +
+      (withMail ? "" : '<p class="small" style="background:#fff7e6;border:1px solid #f3d08a;padding:8px 10px;border-radius:8px">No email addresses are on the student records yet. Add them on the Students tab (Edit → Email), import them into the Email column of the Students tab, or type the address when you email one person.</p>') +
+      '<div class="tbl-wrap"><table><thead><tr>' + (canSend ? '<th class="c"><input type="checkbox" id="alAll" style="min-height:0" title="Select all with email"></th>' : "") + "<th>" + L("reg") + "</th><th>" + L("name") + "</th><th>" + L("email") + '</th><th class="n">Invoices</th><th class="n">Days late</th><th class="n">' + L("balance") + "</th><th></th></tr></thead><tbody>" +
+      (rows.slice(pg.from, pg.to).map(function (r) {
+        return "<tr>" + (canSend ? '<td class="c"><input type="checkbox" data-k="' + esc(r.key) + '" style="min-height:0"' + (r.email ? "" : " disabled") + (sel[r.key] ? " checked" : "") + "></td>" : "") +
+          "<td>" + esc(r.reg || "–") + "</td><td>" + esc(r.name) + (r.reg ? "" : ' <span class="small muted">(no Reg No)</span>') + "</td><td>" + (r.email ? esc(r.email) : '<span class="muted small">none</span>') + '</td><td class="n">' + r.invs.length + '</td><td class="n ' + (r.maxLate > 0 ? "neg" : "") + '">' + (r.maxLate > 0 ? int(r.maxLate) : "–") + '</td><td class="n">' + usd(r.bal) + "</td>" +
+          "<td>" + (canSend ? '<button class="btn small" data-one="' + esc(r.key) + '"><i class="ti ti-mail"></i> Email</button>' : "") + "</td></tr>";
+      }).join("") || '<tr><td colspan="8" class="empty">Nobody matches.</td></tr>') + "</tbody></table></div>" + pg.html + "</div>" +
+      '<p class="small muted">Emails go out from the Google account that runs the Fee Tracker script (a personal Gmail can send about 100 a day; Google Workspace about 1,500). Sender name, reply-to address and a default CC can be set under Admin → Settings (items “Email sender name”, “Email reply-to”, “Email CC”, “Email signature”).</p>';
+    var map = {}; rows.forEach(function (r) { map[r.key] = r; });
+    function count() { var n = Object.keys(sel).filter(function (k) { return sel[k] && map[k] && map[k].email; }).length; if ($("alN")) $("alN").textContent = n; return n; }
+    var upd = debounce(function () { S.cache.alF = { kind: $("alK").value, days: $("alD") ? $("alD").value : f.days, minDays: $("alM") ? $("alM").value : f.minDays, q: $("alQ").value, withEmail: $("alW").checked }; S.cache.pg_al = 0; var pos = $("alQ").selectionStart, focusQ = document.activeElement === $("alQ"); render(); if (focusQ) { $("alQ").focus(); try { $("alQ").setSelectionRange(pos, pos); } catch (e) {} } }, 250);
+    $("alQ").oninput = upd; ["alK", "alD", "alM", "alW"].forEach(function (id) { if ($(id)) $(id).onchange = upd; });
+    el.querySelectorAll("[data-k]").forEach(function (c) { c.onchange = function () { sel[c.getAttribute("data-k")] = c.checked; count(); }; });
+    if ($("alAll")) $("alAll").onchange = function () { var on = $("alAll").checked; rows.forEach(function (r) { if (r.email) sel[r.key] = on; }); el.querySelectorAll("[data-k]").forEach(function (c) { if (!c.disabled) c.checked = on; }); count(); };
+    el.querySelectorAll("[data-one]").forEach(function (b) { b.onclick = function () { var r = map[b.getAttribute("data-one")]; emailCompose({ type: r.maxLate > 0 ? "overdue" : "reminder", reg: r.reg, name: r.name, invs: r.invs }); }; });
+    count();
+    if ($("alGo")) $("alGo").onclick = function () {
+      var list = rows.filter(function (r) { return sel[r.key] && r.email; });
+      if (!list.length) { notice("Tick the people to email first (only those with an email address can be ticked).", "info"); return; }
+      bulkDialog(list);
+    };
+  }
+  function bulkDialog(list) {
+    modal('<div class="mh"><h3>Send ' + list.length + " email" + (list.length > 1 ? "s" : "") + ' · ផ្ញើអ៊ីមែល</h3><button class="btn small" data-close>✕</button></div>' +
+      '<p>Each person gets one email listing their open invoices: an <b>overdue notice</b> if anything is past due, otherwise a <b>payment reminder</b>. Check the wording below, then send.</p>' +
+      '<div class="form"><label class="f wide">CC (optional, added to every email)<input id="bkCc" value="' + esc(ccDefault()) + '"></label>' +
+      '<label class="f wide">Overdue notice message<textarea id="bkMo" rows="4">' + esc(defaultMsg("overdue")) + "</textarea></label>" +
+      '<label class="f wide">Reminder message<textarea id="bkMr" rows="4">' + esc(defaultMsg("reminder")) + "</textarea></label></div>" +
+      '<div id="bkSt" class="small muted" style="margin-top:6px">Checking how many emails are left today…</div><div class="tbl-wrap" style="max-height:220px;overflow:auto;margin-top:6px"><table><tbody id="bkRows">' +
+      list.map(function (r, i) { return '<tr><td>' + esc(r.name) + '</td><td class="small">' + esc(r.email) + '</td><td class="n">' + usd(r.bal) + '</td><td id="bkR' + i + '" class="small muted">waiting</td></tr>'; }).join("") +
+      '</tbody></table></div><div class="mf"><button class="btn" data-close id="bkCancel">Close</button><button class="btn primary" id="bkGo" disabled><i class="ti ti-send"></i> Send ' + list.length + "</button></div>", "wide");
+    api({ action: "emailLog", limit: 1 }).then(function (j) {
+      var q = j.quota;
+      $("bkSt").textContent = q == null ? "" : q + " emails left today for this Google account." + (q < list.length ? " Not enough for all — only the first " + q + " will be sent." : "");
+      $("bkGo").disabled = false;
+    }).catch(function (e) { $("bkSt").textContent = errText(e); $("bkGo").disabled = false; });
+    var stop = false;
+    $("bkCancel").addEventListener("click", function () { stop = true; });
+    $("bkGo").onclick = function () {
+      $("bkGo").disabled = true; var ok = 0, bad = 0, i = 0, cc = $("bkCc").value, mo = $("bkMo").value, mr = $("bkMr").value;
+      function next() {
+        if (stop || i >= list.length) { $("bkSt").innerHTML = "<b>Done:</b> " + ok + " sent" + (bad ? ", " + bad + " failed (see the list)" : "") + ". All sends are in Sent emails."; $("bkCancel").textContent = "Close"; return; }
+        var r = list[i], cell = $("bkR" + i), type = r.maxLate > 0 ? "overdue" : "reminder", o = { type: type, reg: r.reg, name: r.name, invs: r.invs, message: type === "overdue" ? mo : mr };
+        cell.textContent = "sending…";
+        api({ action: "sendEmail", to: r.email, cc: cc, subject: mailSubject(o), html: mailHtml(o), text: mailText(o), type: TPL[type].en, reg: r.reg || "", ref: r.invs.map(function (g) { return g.inv; }).join(", ") })
+          .then(function () { ok++; cell.innerHTML = '<span style="color:var(--ok,#16a34a)">✓ sent</span>'; })
+          .catch(function (e) { bad++; cell.innerHTML = '<span class="neg">' + esc(errText(e)) + "</span>"; if (e && e.detail && /limit/i.test(e.detail)) stop = true; })
+          .then(function () { i++; $("bkSt").textContent = "Sending " + Math.min(i + 1, list.length) + " of " + list.length + "…"; next(); });
+      }
+      next();
+    };
+  }
+  function alLog(el) {
+    el.innerHTML = '<div class="card" style="margin-top:10px"><div class="bar"><label class="f" style="flex:1">Filter · តម្រង<input id="elQ" placeholder="Email, Reg No, invoice no., subject…"></label><span class="small muted" id="elQt"></span></div><div id="elT" class="tbl-wrap" style="margin-top:10px">Loading…</div></div>';
+    api({ action: "emailLog", limit: 1000 }).then(function (j) {
+      $("elQt").textContent = j.quota == null ? "" : j.quota + " emails left today";
+      function draw() {
+        var q = $("elQ").value.toLowerCase();
+        var rows = j.log.filter(function (r) { return !q || r.join(" ").toLowerCase().indexOf(q) >= 0; });
+        $("elT").innerHTML = rows.length ? "<table><thead><tr><th>Time</th><th>Sent by</th><th>To</th><th>CC</th><th>Subject</th><th>Type</th><th>Reg No</th><th>Invoice / receipt</th><th>Result</th></tr></thead><tbody>" +
+          rows.slice(0, 500).map(function (r) { return "<tr>" + r.map(function (v, i) { return "<td" + (i === 4 ? ' class="small"' : "") + ">" + (i === 8 ? (v === "Sent" ? '<span style="color:#16a34a">Sent</span>' : '<span class="neg">' + esc(v) + "</span>") : esc(v)) + "</td>"; }).join("") + "</tr>"; }).join("") + "</tbody></table>"
+          : '<div class="empty">No emails sent yet.</div>';
+      }
+      draw(); $("elQ").oninput = debounce(draw, 200);
+    }).catch(function (e) { $("elT").textContent = errText(e); });
+  }
   /* ---------------- start ---------------- */
   (function init() {
     try { S.token = localStorage.getItem(LS_TOK) || sessionStorage.getItem(LS_TOK) || ""; } catch (e) {}
