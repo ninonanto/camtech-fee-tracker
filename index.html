@@ -770,7 +770,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
   /* ---------------- API ---------------- */
   function api(payload) {
     payload.token = S.token;
-    if (S.stale && /^(save|void|clear|send)/.test(payload.action || "")) return Promise.reject({ code: "stale" });
+    if (S.stale && /^(save|void|clear|logEmail)/.test(payload.action || "")) return Promise.reject({ code: "stale" });
     if (API_URL.indexOf("http") !== 0) return Promise.reject({ code: "nourl" });
     return fetch(API_URL, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(payload), redirect: "follow" })
       .then(function (r) { if (!r.ok) throw { code: "http", detail: r.status }; return r.json(); })
@@ -2377,21 +2377,26 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
   function emailOf(reg) { var s = reg && S.M.stuMap[reg]; return s ? String(s.email || "").trim() : ""; }
   function ccDefault() { return S.cfg.mailCc || ""; }
 
-  /** Compose one email. o = { type, reg, name, invs?, rcp? } */
-  function emailCompose(o) {
-    if (lvl("email") < 2) { notice("Your role can't send emails. Ask an Admin.", "bad"); return; }
+  /** Prepare one email. The page never sends it: copy it into Gmail / Outlook and send it yourself, then "Mark as sent".
+   *  o = { type, reg, name, invs?, rcp? }; queue = { i, n, next } when stepping through several people. */
+  function emailCompose(o, queue) {
+    if (lvl("email") < 2) { notice("Your role can't prepare emails. Ask an Admin.", "bad"); return; }
     o.message = o.message || defaultMsg(o.type);
-    var to = emailOf(o.reg), stu = o.reg && S.M.stuMap[o.reg];
+    var to = o.to || emailOf(o.reg), stu = o.reg && S.M.stuMap[o.reg];
     var types = o.rcp ? [["receipt", "Receipt · បង្កាន់ដៃ"]] : [["invoice", "Invoice · វិក្កយបត្រ"], ["reminder", "Payment reminder · រំលឹក"], ["overdue", "Overdue notice · ហួសកំណត់"]];
-    modal('<div class="mh"><h3><i class="ti ti-mail"></i> Email · ផ្ញើអ៊ីមែល — ' + esc(o.name) + '</h3><button class="btn small" data-close>✕</button></div>' +
+    modal('<div class="mh"><h3><i class="ti ti-mail"></i> Prepare email · រៀបចំអ៊ីមែល — ' + esc(o.name) + (queue ? ' <span class="muted small">(' + (queue.i + 1) + " of " + queue.n + ")</span>" : "") + '</h3><button class="btn small" data-close>✕</button></div>' +
+      '<p class="small muted" style="margin-top:0">Nothing is sent from here. Click <b>Copy &amp; open Gmail</b>, press <b>Ctrl+V</b> in the message body, check it and send it from your own mailbox. Then click <b>Mark as sent</b> so it is recorded.</p>' +
       '<div class="form"><label class="f wide">To · ទៅកាន់<input id="emTo" type="email" multiple value="' + esc(to) + '" placeholder="student@example.com"></label>' +
-      (o.reg && stu && lvl("students") >= 2 ? '<label class="small wide" style="display:flex;gap:6px;align-items:center;margin-top:-4px"><input type="checkbox" id="emSave" style="min-height:0"' + (to ? "" : " checked") + "> Save this address on the student record" + (to ? " (replaces " + esc(to) + ")" : "") + "</label>" : "") +
+      (o.reg && stu && lvl("students") >= 2 ? '<label class="small wide" style="display:flex;gap:6px;align-items:center;margin-top:-4px"><input type="checkbox" id="emSave" style="min-height:0"' + (to ? "" : " checked") + "> " + (to ? "If I change the address above, save it on the student record" : "Save this address on the student record") + "</label>" : "") +
       '<label class="f wide">CC<input id="emCc" value="' + esc(ccDefault()) + '" placeholder="optional"></label>' +
       '<label class="f">Type · ប្រភេទ<select id="emTy">' + opts(types, o.type) + "</select></label>" +
       '<label class="f wide">Subject · ប្រធានបទ<input id="emSu"></label>' +
       '<label class="f wide">Message · សារ (Khmer and English)<textarea id="emMs" rows="5"></textarea></label></div>' +
       '<div class="small muted" style="margin:6px 0 4px">Preview · មើលជាមុន</div><iframe id="emPv" style="width:100%;height:330px;border:1px solid var(--line);border-radius:8px;background:#fff"></iframe>' +
-      '<div class="err" id="emE"></div><div class="mf"><span class="small muted" id="emQ" style="align-self:center;margin-right:auto"></span><button class="btn" data-close>Cancel</button><button class="btn primary" id="emSend"><i class="ti ti-send"></i> Send</button></div>', "wide");
+      '<div class="err" id="emE"></div><div class="mf">' +
+      (queue ? '<button class="btn" id="emSkip" style="margin-right:auto">Skip · រំលង</button>' : '<button class="btn" data-close style="margin-right:auto">Close</button>') +
+      '<button class="btn" id="emCopy"><i class="ti ti-copy"></i> Copy message</button><button class="btn" id="emMailto"><i class="ti ti-mail-forward"></i> Open in mail app</button>' +
+      '<button class="btn" id="emGmail"><i class="ti ti-brand-gmail"></i> Copy &amp; open Gmail</button><button class="btn primary" id="emDone"><i class="ti ti-check"></i> Mark as sent' + (queue && queue.i + 1 < queue.n ? " &amp; next" : "") + "</button></div>", "wide");
     function sync(resetText) {
       o.type = $("emTy").value;
       if (resetText) { o.message = defaultMsg(o.type); $("emMs").value = o.message; $("emSu").value = mailSubject(o); }
@@ -2401,18 +2406,54 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
     $("emMs").value = o.message; $("emSu").value = mailSubject(o); sync(false);
     $("emTy").onchange = function () { sync(true); };
     $("emMs").oninput = debounce(function () { sync(false); }, 300);
-    $("emSend").onclick = function () {
+    var saved = false;
+    function saveAddr() {
       var addr = $("emTo").value.trim();
-      if (!addr) { $("emE").textContent = "Enter the email address."; return; }
-      $("emE").textContent = ""; $("emSend").disabled = true; $("emSend").textContent = "Sending…";
+      if (saved || !$("emSave") || !$("emSave").checked || !addr || addr === to) return Promise.resolve();
+      saved = true; return saveStudentEmail(o.reg, addr).catch(function (e) { saved = false; $("emE").textContent = "Address not saved: " + errText(e); });
+    }
+    function copy() {
       o.message = $("emMs").value;
-      var save = $("emSave") && $("emSave").checked && addr !== to ? saveStudentEmail(o.reg, addr) : Promise.resolve();
-      save.then(function () {
-        return api({ action: "sendEmail", to: addr, cc: $("emCc").value, subject: $("emSu").value, html: mailHtml(o), text: mailText(o), type: TPL[o.type].en, reg: o.reg || "", ref: o.rcp ? o.rcp.rcp : o.invs.map(function (g) { return g.inv; }).join(", ") });
-      }).then(function (j) {
-        closeModal(); notice("Email sent to " + esc(addr) + (j.quota != null ? " · " + j.quota + " emails left today" : "") + ".", "good");
-      }).catch(function (e) { $("emE").textContent = errText(e); $("emSend").disabled = false; $("emSend").innerHTML = '<i class="ti ti-send"></i> Send'; });
+      var html = mailHtml(o), text = mailText(o);
+      if (navigator.clipboard && window.ClipboardItem) {
+        return navigator.clipboard.write([new ClipboardItem({ "text/html": new Blob([html], { type: "text/html" }), "text/plain": new Blob([text], { type: "text/plain" }) })]).catch(function () { return copyFallback(html); });
+      }
+      return copyFallback(html);
+    }
+    $("emCopy").onclick = function () { copy().then(function () { notice("Message copied. Paste it (Ctrl+V) into a new email.", "good"); }); saveAddr(); };
+    $("emGmail").onclick = function () {
+      var w = window.open("about:blank", "_blank");
+      copy().then(function () {
+        var u = "https://mail.google.com/mail/?view=cm&fs=1&to=" + encodeURIComponent($("emTo").value.trim()) + ($("emCc").value.trim() ? "&cc=" + encodeURIComponent($("emCc").value.trim()) : "") + "&su=" + encodeURIComponent($("emSu").value);
+        if (w) w.location.href = u; else window.open(u, "_blank");
+        notice("Message copied. In Gmail, click in the message body and press Ctrl+V, then Send.", "good", 9000);
+      });
+      saveAddr();
     };
+    $("emMailto").onclick = function () {
+      o.message = $("emMs").value;
+      var body = mailText(o); if (body.length > 1800) body = body.slice(0, 1800) + "\n…";
+      location.href = "mailto:" + encodeURIComponent($("emTo").value.trim()) + "?" + ($("emCc").value.trim() ? "cc=" + encodeURIComponent($("emCc").value.trim()) + "&" : "") + "subject=" + encodeURIComponent($("emSu").value) + "&body=" + encodeURIComponent(body);
+      saveAddr();
+    };
+    $("emDone").onclick = function () {
+      var addr = $("emTo").value.trim();
+      if (!addr) { $("emE").textContent = "Enter the address you sent it to."; return; }
+      $("emDone").disabled = true;
+      saveAddr().then(function () {
+        return api({ action: "logEmail", to: addr, subject: $("emSu").value, type: TPL[o.type].en, reg: o.reg || "", ref: o.rcp ? o.rcp.rcp : o.invs.map(function (g) { return g.inv; }).join(", ") });
+      }).then(function () {
+        if (queue) { queue.next(true); return; }
+        closeModal(); notice("Recorded as sent to " + esc(addr) + ".", "good");
+      }).catch(function (e) { $("emE").textContent = errText(e); $("emDone").disabled = false; });
+    };
+    if ($("emSkip")) $("emSkip").onclick = function () { queue.next(false); };
+  }
+  function copyFallback(html) {
+    var d = document.createElement("div"); d.contentEditable = "true"; d.innerHTML = html; d.style.position = "fixed"; d.style.left = "-9999px"; document.body.appendChild(d);
+    var r = document.createRange(); r.selectNodeContents(d); var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+    try { document.execCommand("copy"); } catch (e) {}
+    sel.removeAllRanges(); d.remove(); return Promise.resolve();
   }
   function saveStudentEmail(reg, addr) {
     var raw = S.students.filter(function (x) { return x.reg === reg; })[0]; if (!raw) return Promise.resolve();
@@ -2433,7 +2474,7 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
   /* ---------------- the Email alerts page ---------------- */
   RENDER.alerts = function (el) {
     var sub = S.sub.alerts || "send";
-    el.innerHTML = '<div class="head"><div><h2>' + L("alerts") + '</h2><p>Payment reminders and overdue notices by email, in Khmer and English.</p></div></div><div class="sub" id="alSub">' +
+    el.innerHTML = '<div class="head"><div><h2>' + L("alerts") + '</h2><p>Prepare payment reminders and overdue notices in Khmer and English — you send them from your own mailbox.</p></div></div><div class="sub" id="alSub">' +
       [["send", "Send reminders · ផ្ញើការរំលឹក"], ["log", "Sent emails · អ៊ីមែលដែលបានផ្ញើ"]].map(function (x) { return '<button data-sub="' + x[0] + '" class="' + (sub === x[0] ? "on" : "") + '">' + esc(x[1]) + "</button>"; }).join("") + '</div><div id="alBody"></div>';
     $("alSub").onclick = function (ev) { var b = ev.target.closest("[data-sub]"); if (b) { S.sub.alerts = b.getAttribute("data-sub"); render(); } };
     if (sub === "log") alLog($("alBody")); else alSend($("alBody"));
@@ -2467,15 +2508,15 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
       '<label class="f" style="flex:1;min-width:200px">Search · ស្វែងរក<input id="alQ" value="' + esc(f.q) + '" placeholder="Reg No, name or email"></label>' +
       '<label class="small" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="alW" style="min-height:0"' + (f.withEmail ? " checked" : "") + "> Only with an email address</label></div>" +
       '<div class="card tight" style="margin-top:10px"><div class="bar" style="justify-content:space-between"><div class="small muted">' + int(rows.length) + " people · " + int(withMail) + " with an email address · USD " + usd(rows.reduce(function (a, r) { return a + r.bal; }, 0)) + " open" + "</div>" +
-      (canSend ? '<button class="btn primary" id="alGo"><i class="ti ti-send"></i><span>Send to selected (<b id="alN">0</b>)</span></button>' : "") + "</div>" +
+      (canSend ? '<button class="btn primary" id="alGo"><i class="ti ti-mail"></i><span>Prepare emails for selected (<b id="alN">0</b>)</span></button>' : "") + "</div>" +
       (withMail ? "" : '<p class="small" style="background:#fff7e6;border:1px solid #f3d08a;padding:8px 10px;border-radius:8px">No email addresses are on the student records yet. Add them on the Students tab (Edit → Email), import them into the Email column of the Students tab, or type the address when you email one person.</p>') +
       '<div class="tbl-wrap"><table><thead><tr>' + (canSend ? '<th class="c"><input type="checkbox" id="alAll" style="min-height:0" title="Select all with email"></th>' : "") + "<th>" + L("reg") + "</th><th>" + L("name") + "</th><th>" + L("email") + '</th><th class="n">Invoices</th><th class="n">Days late</th><th class="n">' + L("balance") + "</th><th></th></tr></thead><tbody>" +
       (rows.slice(pg.from, pg.to).map(function (r) {
         return "<tr>" + (canSend ? '<td class="c"><input type="checkbox" data-k="' + esc(r.key) + '" style="min-height:0"' + (r.email ? "" : " disabled") + (sel[r.key] ? " checked" : "") + "></td>" : "") +
           "<td>" + esc(r.reg || "–") + "</td><td>" + esc(r.name) + (r.reg ? "" : ' <span class="small muted">(no Reg No)</span>') + "</td><td>" + (r.email ? esc(r.email) : '<span class="muted small">none</span>') + '</td><td class="n">' + r.invs.length + '</td><td class="n ' + (r.maxLate > 0 ? "neg" : "") + '">' + (r.maxLate > 0 ? int(r.maxLate) : "–") + '</td><td class="n">' + usd(r.bal) + "</td>" +
-          "<td>" + (canSend ? '<button class="btn small" data-one="' + esc(r.key) + '"><i class="ti ti-mail"></i> Email</button>' : "") + "</td></tr>";
+          "<td>" + (canSend ? '<button class="btn small" data-one="' + esc(r.key) + '"><i class="ti ti-mail"></i> Prepare</button>' : "") + "</td></tr>";
       }).join("") || '<tr><td colspan="8" class="empty">Nobody matches.</td></tr>') + "</tbody></table></div>" + pg.html + "</div>" +
-      '<p class="small muted">Emails go out from the Google account that runs the Fee Tracker script (a personal Gmail can send about 100 a day; Google Workspace about 1,500). Sender name, reply-to address and a default CC can be set under Admin → Settings (items “Email sender name”, “Email reply-to”, “Email CC”, “Email signature”).</p>';
+      '<p class="small muted">The Fee Tracker never sends email itself. Prepare builds the message (Khmer + English, open invoices, bank details); you send it from your own Gmail or Outlook and click Mark as sent to record it. A default CC and the signature line can be set under Admin → Settings (items “Email CC”, “Email signature”).</p>';
     var map = {}; rows.forEach(function (r) { map[r.key] = r; });
     function count() { var n = Object.keys(sel).filter(function (k) { return sel[k] && map[k] && map[k].email; }).length; if ($("alN")) $("alN").textContent = n; return n; }
     var upd = debounce(function () { S.cache.alF = { kind: $("alK").value, days: $("alD") ? $("alD").value : f.days, minDays: $("alM") ? $("alM").value : f.minDays, q: $("alQ").value, withEmail: $("alW").checked }; S.cache.pg_al = 0; var pos = $("alQ").selectionStart, focusQ = document.activeElement === $("alQ"); render(); if (focusQ) { $("alQ").focus(); try { $("alQ").setSelectionRange(pos, pos); } catch (e) {} } }, 250);
@@ -2490,46 +2531,25 @@ tr.void td { color: var(--muted); text-decoration: line-through; }
       bulkDialog(list);
     };
   }
+  /** Step through the ticked people one by one: prepare, send from your mailbox, mark as sent, next. */
   function bulkDialog(list) {
-    modal('<div class="mh"><h3>Send ' + list.length + " email" + (list.length > 1 ? "s" : "") + ' · ផ្ញើអ៊ីមែល</h3><button class="btn small" data-close>✕</button></div>' +
-      '<p>Each person gets one email listing their open invoices: an <b>overdue notice</b> if anything is past due, otherwise a <b>payment reminder</b>. Check the wording below, then send.</p>' +
-      '<div class="form"><label class="f wide">CC (optional, added to every email)<input id="bkCc" value="' + esc(ccDefault()) + '"></label>' +
-      '<label class="f wide">Overdue notice message<textarea id="bkMo" rows="4">' + esc(defaultMsg("overdue")) + "</textarea></label>" +
-      '<label class="f wide">Reminder message<textarea id="bkMr" rows="4">' + esc(defaultMsg("reminder")) + "</textarea></label></div>" +
-      '<div id="bkSt" class="small muted" style="margin-top:6px">Checking how many emails are left today…</div><div class="tbl-wrap" style="max-height:220px;overflow:auto;margin-top:6px"><table><tbody id="bkRows">' +
-      list.map(function (r, i) { return '<tr><td>' + esc(r.name) + '</td><td class="small">' + esc(r.email) + '</td><td class="n">' + usd(r.bal) + '</td><td id="bkR' + i + '" class="small muted">waiting</td></tr>'; }).join("") +
-      '</tbody></table></div><div class="mf"><button class="btn" data-close id="bkCancel">Close</button><button class="btn primary" id="bkGo" disabled><i class="ti ti-send"></i> Send ' + list.length + "</button></div>", "wide");
-    api({ action: "emailLog", limit: 1 }).then(function (j) {
-      var q = j.quota;
-      $("bkSt").textContent = q == null ? "" : q + " emails left today for this Google account." + (q < list.length ? " Not enough for all — only the first " + q + " will be sent." : "");
-      $("bkGo").disabled = false;
-    }).catch(function (e) { $("bkSt").textContent = errText(e); $("bkGo").disabled = false; });
-    var stop = false;
-    $("bkCancel").addEventListener("click", function () { stop = true; });
-    $("bkGo").onclick = function () {
-      $("bkGo").disabled = true; var ok = 0, bad = 0, i = 0, cc = $("bkCc").value, mo = $("bkMo").value, mr = $("bkMr").value;
-      function next() {
-        if (stop || i >= list.length) { $("bkSt").innerHTML = "<b>Done:</b> " + ok + " sent" + (bad ? ", " + bad + " failed (see the list)" : "") + ". All sends are in Sent emails."; $("bkCancel").textContent = "Close"; return; }
-        var r = list[i], cell = $("bkR" + i), type = r.maxLate > 0 ? "overdue" : "reminder", o = { type: type, reg: r.reg, name: r.name, invs: r.invs, message: type === "overdue" ? mo : mr };
-        cell.textContent = "sending…";
-        api({ action: "sendEmail", to: r.email, cc: cc, subject: mailSubject(o), html: mailHtml(o), text: mailText(o), type: TPL[type].en, reg: r.reg || "", ref: r.invs.map(function (g) { return g.inv; }).join(", ") })
-          .then(function () { ok++; cell.innerHTML = '<span style="color:var(--ok,#16a34a)">✓ sent</span>'; })
-          .catch(function (e) { bad++; cell.innerHTML = '<span class="neg">' + esc(errText(e)) + "</span>"; if (e && e.detail && /limit/i.test(e.detail)) stop = true; })
-          .then(function () { i++; $("bkSt").textContent = "Sending " + Math.min(i + 1, list.length) + " of " + list.length + "…"; next(); });
-      }
-      next();
-    };
+    var i = 0, done = 0;
+    function show() {
+      if (i >= list.length) { closeModal(); notice(done + " of " + list.length + " recorded as sent. See Sent emails.", "good", 7000); render(); return; }
+      var r = list[i];
+      emailCompose({ type: r.maxLate > 0 ? "overdue" : "reminder", reg: r.reg, name: r.name, invs: r.invs, to: r.email }, { i: i, n: list.length, next: function (ok) { if (ok) { done++; S.cache.alSel[r.key] = false; } i++; show(); } });
+    }
+    show();
   }
   function alLog(el) {
     el.innerHTML = '<div class="card" style="margin-top:10px"><div class="bar"><label class="f" style="flex:1">Filter · តម្រង<input id="elQ" placeholder="Email, Reg No, invoice no., subject…"></label><span class="small muted" id="elQt"></span></div><div id="elT" class="tbl-wrap" style="margin-top:10px">Loading…</div></div>';
     api({ action: "emailLog", limit: 1000 }).then(function (j) {
-      $("elQt").textContent = j.quota == null ? "" : j.quota + " emails left today";
       function draw() {
         var q = $("elQ").value.toLowerCase();
         var rows = j.log.filter(function (r) { return !q || r.join(" ").toLowerCase().indexOf(q) >= 0; });
-        $("elT").innerHTML = rows.length ? "<table><thead><tr><th>Time</th><th>Sent by</th><th>To</th><th>CC</th><th>Subject</th><th>Type</th><th>Reg No</th><th>Invoice / receipt</th><th>Result</th></tr></thead><tbody>" +
-          rows.slice(0, 500).map(function (r) { return "<tr>" + r.map(function (v, i) { return "<td" + (i === 4 ? ' class="small"' : "") + ">" + (i === 8 ? (v === "Sent" ? '<span style="color:#16a34a">Sent</span>' : '<span class="neg">' + esc(v) + "</span>") : esc(v)) + "</td>"; }).join("") + "</tr>"; }).join("") + "</tbody></table>"
-          : '<div class="empty">No emails sent yet.</div>';
+        $("elT").innerHTML = rows.length ? "<table><thead><tr><th>Time</th><th>Recorded by</th><th>To</th><th>CC</th><th>Subject</th><th>Type</th><th>Reg No</th><th>Invoice / receipt</th><th>Result</th></tr></thead><tbody>" +
+          rows.slice(0, 500).map(function (r) { return "<tr>" + r.map(function (v, i) { return "<td" + (i === 4 ? ' class="small"' : "") + ">" + (i === 8 ? '<span style="color:#16a34a">' + esc(v) + "</span>" : esc(v)) + "</td>"; }).join("") + "</tr>"; }).join("") + "</tbody></table>"
+          : '<div class="empty">No emails recorded yet.</div>';
       }
       draw(); $("elQ").oninput = debounce(draw, 200);
     }).catch(function (e) { $("elT").textContent = errText(e); });
